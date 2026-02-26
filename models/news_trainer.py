@@ -1,18 +1,25 @@
 # models/news_trainer.py
-"""News and Policy-Based Model Training.
+"""News and Policy-Based Model Training - Enhanced Version.
 
 This module trains models to understand and predict market movements based on:
-- News sentiment analysis
+- News sentiment analysis with pretrained transformers (BERT/FinBERT)
 - Policy impact assessment
 - Historical price patterns correlated with news
 - Multi-modal learning (text + numerical data)
 
-Architecture:
-1. News Encoder: Transformer-based text encoder for news/policy content
+Architecture (Enhanced):
+1. News Encoder: Pretrained BERT/FinBERT for true text embeddings
 2. Sentiment Fusion: Combines sentiment scores with encoded text
 3. Price Encoder: LSTM/GRU for historical price patterns
-4. Fusion Layer: Combines news and price features
+4. Fusion Layer: Deep fusion with attention mechanism
 5. Prediction Head: Outputs trading signals and confidence
+
+Improvements over base version:
+- True pretrained transformer embeddings (not synthetic)
+- Deep fusion instead of simple concatenation
+- Focal loss for class imbalance
+- Gradient checkpointing for memory efficiency
+- Mixed precision training
 """
 
 import time
@@ -20,12 +27,14 @@ import warnings
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, Dataset, SequentialSampler
+import torch.nn.functional as F
+from torch.utils.data import DataLoader, Dataset, SequentialSampler, WeightedRandomSampler
+from torch.cuda.amp import GradScaler, autocast
 
 from config.settings import CONFIG
 from data.news_collector import NewsArticle, get_collector
@@ -41,6 +50,14 @@ except ImportError:
     class ConvergenceWarning(Exception):
         """Dummy ConvergenceWarning for sklearn compatibility."""
         pass
+
+# Try to import transformers for pretrained embeddings
+try:
+    from transformers import BertTokenizer, BertModel
+    TRANSFORMERS_AVAILABLE = True
+except ImportError:
+    TRANSFORMERS_AVAILABLE = False
+    log.warning("Transformers not available. Install with: pip install transformers")
 
 
 @dataclass
@@ -90,8 +107,182 @@ class NewsDataset(Dataset):
         }
 
 
+class PretrainedNewsEncoder(nn.Module):
+    """Pretrained transformer-based encoder for news text (BERT/FinBERT).
+    
+    This provides true semantic embeddings instead of synthetic features.
+    Supports multiple pretrained models for different languages/domains.
+    """
+    
+    PRETRAINED_MODELS = {
+        'bert-base-chinese': 'bert-base-chinese',  # Chinese news
+        'bert-base-uncased': 'bert-base-uncased',  # English news
+        'finbert': 'ProsusAI/finbert',  # Financial domain
+        'finance-bert': 'bert-base-uncased',  # Alternative
+    }
+    
+    def __init__(
+        self,
+        model_name: str = 'bert-base-chinese',
+        freeze_encoder: bool = True,
+        embed_dim: int = 768,
+        dropout: float = 0.1,
+        max_length: int = 512,
+    ) -> None:
+        super().__init__()
+        
+        if not TRANSFORMERS_AVAILABLE:
+            raise ImportError(
+                "Transformers not available. Install with: pip install transformers"
+            )
+        
+        self.model_name = model_name
+        self.freeze_encoder = freeze_encoder
+        self.max_length = max_length
+        
+        # Get actual pretrained model path
+        pretrained_path = self.PRETRAINED_MODELS.get(model_name, model_name)
+        
+        # Load pretrained tokenizer and model
+        self.tokenizer = BertTokenizer.from_pretrained(pretrained_path)
+        self.bert = BertModel.from_pretrained(pretrained_path)
+        
+        # Freeze encoder weights if requested (saves memory, faster training)
+        if freeze_encoder:
+            for param in self.bert.parameters():
+                param.requires_grad = False
+                
+        # Projection layer to match model embed_dim
+        bert_dim = self.bert.config.hidden_size
+        self.projection = nn.Sequential(
+            nn.Linear(bert_dim, embed_dim),
+            nn.LayerNorm(embed_dim),
+            nn.Dropout(dropout),
+        )
+        
+        log.info(f"Loaded pretrained news encoder: {model_name} (frozen={freeze_encoder})")
+        
+    def tokenize_texts(
+        self,
+        texts: List[str],
+        max_length: Optional[int] = None,
+    ) -> Dict[str, torch.Tensor]:
+        """Tokenize texts for BERT model."""
+        return self.tokenizer(
+            texts,
+            padding=True,
+            truncation=True,
+            max_length=max_length or self.max_length,
+            return_tensors='pt',
+        )
+    
+    def forward(
+        self,
+        token_ids: torch.Tensor,
+        attention_mask: torch.Tensor | None = None,
+        pooling: str = 'cls',
+    ) -> torch.Tensor:
+        """Encode news text to embeddings using pretrained BERT.
+        
+        Args:
+            token_ids: [batch, seq_len] - token IDs
+            attention_mask: [batch, seq_len] - attention mask
+            pooling: 'cls', 'mean', or 'max'
+            
+        Returns:
+            [batch, embed_dim] - pooled text embeddings
+        """
+        # Create attention mask if not provided
+        if attention_mask is None:
+            attention_mask = (token_ids != 0).float()
+            
+        # Get BERT outputs
+        with torch.set_grad_enabled(not self.freeze_encoder):
+            outputs = self.bert(
+                input_ids=token_ids,
+                attention_mask=attention_mask,
+                output_hidden_states=True,
+            )
+            
+        # Pooling strategies
+        if pooling == 'cls':
+            # Use [CLS] token representation
+            pooled = outputs.last_hidden_state[:, 0, :]
+        elif pooling == 'mean':
+            # Mean pooling over non-padded tokens
+            mask_expanded = attention_mask.unsqueeze(-1).expand_as(
+                outputs.last_hidden_state
+            )
+            sum_embeddings = (outputs.last_hidden_state * mask_expanded).sum(1)
+            sum_mask = mask_expanded.sum(1).clamp(min=1e-9)
+            pooled = sum_embeddings / sum_mask
+        else:  # max
+            # Max pooling
+            pooled = outputs.last_hidden_state.max(dim=1)[0]
+            
+        # Project to target dimension
+        output = self.projection(pooled)
+        
+        return output
+    
+    def encode_articles(
+        self,
+        articles: List[NewsArticle],
+        batch_size: int = 16,
+        device: Optional[str] = None,
+    ) -> np.ndarray:
+        """Encode news articles to embeddings.
+        
+        Args:
+            articles: List of NewsArticle objects
+            batch_size: Batch size for inference
+            device: Device to use ('cuda' or 'cpu')
+            
+        Returns:
+            [n_articles, embed_dim] - article embeddings
+        """
+        if device is None:
+            device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            
+        self.to(device)
+        self.eval()
+        
+        all_embeddings = []
+        
+        with torch.no_grad():
+            for i in range(0, len(articles), batch_size):
+                batch_articles = articles[i:i + batch_size]
+                
+                # Create text from article
+                texts = []
+                for article in batch_articles:
+                    title = getattr(article, 'title', '')
+                    content = getattr(article, 'content', '')
+                    summary = getattr(article, 'summary', '')
+                    text = f"{title}. {summary}".strip() or content[:500]
+                    texts.append(text)
+                    
+                # Tokenize
+                encoded = self.tokenize_texts(texts).to(device)
+                
+                # Get embeddings
+                embeddings = self(
+                    encoded['input_ids'],
+                    encoded['attention_mask'],
+                    pooling='cls',
+                )
+                
+                all_embeddings.append(embeddings.cpu().numpy())
+                
+        return np.vstack(all_embeddings)
+
+
 class NewsEncoder(nn.Module):
-    """Transformer-based encoder for news text."""
+    """Transformer-based encoder for news text (lightweight fallback).
+    
+    This is used when pretrained transformers are not available.
+    For production use, prefer PretrainedNewsEncoder.
+    """
 
     def __init__(
         self,

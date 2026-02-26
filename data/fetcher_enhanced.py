@@ -130,15 +130,101 @@ class CircuitBreakerState:
 
 
 class LRUCache(Generic[T]):
-    """Thread-safe LRU cache with TTL support."""
+    """Thread-safe LRU cache with TTL support and memory protection.
 
-    def __init__(self, max_size: int = _MAX_CACHE_SIZE, default_ttl: float = _DEFAULT_CACHE_TTL):
+    FIX 2026-02-26:
+    - Memory-bounded entries with size estimation
+    - Automatic eviction of expired entries
+    - Maximum entry size limits to prevent memory bloat
+    - Periodic cleanup of stale entries
+    """
+
+    # Maximum estimated memory per entry (in MB)
+    MAX_ENTRY_MEMORY_MB = 50
+
+    def __init__(
+        self,
+        max_size: int = _MAX_CACHE_SIZE,
+        default_ttl: float = _DEFAULT_CACHE_TTL,
+        max_memory_mb: float = MAX_ENTRY_MEMORY_MB,
+    ):
         self._cache: OrderedDict[str, CacheEntry[T]] = OrderedDict()
         self._max_size = max_size
         self._default_ttl = default_ttl
+        self._max_memory_mb = max_memory_mb
         self._lock = threading.RLock()
         self._hits = 0
         self._misses = 0
+        self._evictions = 0
+        self._expired_cleanups = 0
+
+        # Start periodic cleanup thread
+        self._cleanup_interval = max(default_ttl / 2, 30.0)
+        self._stop_cleanup = threading.Event()
+        self._cleanup_thread = threading.Thread(
+            target=self._periodic_cleanup,
+            daemon=True,
+            name=f"LRUCache-Cleanup-{id(self)}",
+        )
+        self._cleanup_thread.start()
+
+    def _estimate_size(self, value: T) -> float:
+        """Estimate memory size of a value in MB.
+
+        FIX 2026-02-26: Prevent caching extremely large objects.
+        """
+        try:
+            import sys
+            # For pandas DataFrames, use memory_usage
+            if hasattr(value, "memory_usage"):  # type: ignore
+                # DataFrame or Series
+                mem_usage = value.memory_usage(deep=True)  # type: ignore
+                if hasattr(mem_usage, "sum"):
+                    return float(mem_usage.sum()) / (1024 * 1024)
+                return float(mem_usage) / (1024 * 1024)
+            # For numpy arrays
+            if hasattr(value, "nbytes"):  # type: ignore
+                return float(value.nbytes) / (1024 * 1024)  # type: ignore
+            # Fallback to sys.getsizeof
+            return float(sys.getsizeof(value)) / (1024 * 1024)
+        except Exception:
+            # If estimation fails, assume it's large to be safe
+            return self._max_memory_mb
+
+    def _periodic_cleanup(self) -> None:
+        """Periodically remove expired entries.
+
+        FIX 2026-02-26: Background cleanup to prevent memory leaks.
+        """
+        while not self._stop_cleanup.is_set():
+            try:
+                self._stop_cleanup.wait(self._cleanup_interval)
+                if self._stop_cleanup.is_set():
+                    break
+                self.cleanup_expired()
+            except Exception:
+                pass  # Don't let cleanup errors crash the thread
+
+    def cleanup_expired(self) -> int:
+        """Remove all expired entries.
+
+        FIX 2026-02-26: Explicit cleanup method for manual triggering.
+
+        Returns:
+            Number of entries removed
+        """
+        removed = 0
+        with self._lock:
+            now = time.time()
+            expired_keys = [
+                key for key, entry in self._cache.items()
+                if now > entry.expires_at
+            ]
+            for key in expired_keys:
+                del self._cache[key]
+                removed += 1
+            self._expired_cleanups += removed
+        return removed
 
     def get(self, key: str) -> T | None:
         with self._lock:
@@ -149,16 +235,34 @@ class LRUCache(Generic[T]):
             if entry.is_expired():
                 del self._cache[key]
                 self._misses += 1
+                self._expired_cleanups += 1
                 return None
             self._cache.move_to_end(key)
             entry.hit_count += 1
             self._hits += 1
             return entry.value
 
-    def set(self, key: str, value: T, ttl: float | None = None) -> None:
+    def set(self, key: str, value: T, ttl: float | None = None) -> bool:
+        """Set a cache entry with size validation.
+
+        FIX 2026-02-26: Reject entries that are too large.
+
+        Returns:
+            True if entry was cached, False if rejected due to size
+        """
+        # Check size before caching
+        estimated_size = self._estimate_size(value)
+        if estimated_size > self._max_memory_mb:
+            log.debug(
+                "Cache entry rejected: size %.2f MB exceeds limit %.2f MB for key %s",
+                estimated_size, self._max_memory_mb, key,
+            )
+            return False
+
         with self._lock:
             if key in self._cache:
                 self._cache.move_to_end(key)
+
             entry = CacheEntry(
                 value=value,
                 created_at=time.time(),
@@ -166,8 +270,13 @@ class LRUCache(Generic[T]):
                 key_hash=key,
             )
             self._cache[key] = entry
-            if len(self._cache) > self._max_size:
+
+            # Evict oldest entries if over capacity
+            while len(self._cache) > self._max_size:
                 self._cache.popitem(last=False)
+                self._evictions += 1
+
+        return True
 
     def delete(self, key: str) -> bool:
         with self._lock:
@@ -180,6 +289,16 @@ class LRUCache(Generic[T]):
         with self._lock:
             self._cache.clear()
 
+    def shutdown(self) -> None:
+        """Shutdown the cache and stop cleanup thread.
+
+        FIX 2026-02-26: Proper resource cleanup.
+        """
+        self._stop_cleanup.set()
+        if self._cleanup_thread.is_alive():
+            self._cleanup_thread.join(timeout=2.0)
+        self.clear()
+
     def stats(self) -> dict[str, Any]:
         with self._lock:
             total = self._hits + self._misses
@@ -189,8 +308,11 @@ class LRUCache(Generic[T]):
                 "max_size": self._max_size,
                 "hits": self._hits,
                 "misses": self._misses,
+                "evictions": self._evictions,
+                "expired_cleanups": self._expired_cleanups,
                 "hit_rate": hit_rate,
                 "default_ttl": self._default_ttl,
+                "max_memory_mb": self._max_memory_mb,
             }
 
 
@@ -574,13 +696,25 @@ def get_metrics() -> dict[str, Any]:
 
 
 def reset_all() -> None:
-    """Reset all global instances (for testing/recovery)."""
+    """Reset all global instances (for testing/recovery).
+
+    FIX 2026-02-26: Properly shutdown cache cleanup thread before reset.
+    """
     global _http_client, _cache, _deduplicator
+
+    # Shutdown cache properly to stop cleanup thread
+    with _cache_lock:
+        if _cache is not None:
+            try:
+                _cache.shutdown()
+            except Exception:
+                pass
+            _cache = None
+
     with _http_client_lock:
         if _http_client:
             _http_client.close()
             _http_client = None
-    with _cache_lock:
-        _cache = None
+
     with _deduplicator_lock:
         _deduplicator = None

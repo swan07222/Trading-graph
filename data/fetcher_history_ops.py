@@ -1,4 +1,11 @@
 # data/fetcher_history_ops.py
+"""History fetching operations from multiple sources.
+
+FIX 2026-02-26:
+- Consistent error handling with _RECOVERABLE_FETCH_EXCEPTIONS
+- Error recording for adaptive rate limiting
+- Structured logging with correlation IDs
+"""
 import json
 from typing import Any
 
@@ -8,6 +15,8 @@ from data.fetcher_sources import BARS_PER_DAY
 from utils.logger import get_logger
 
 log = get_logger(__name__)
+
+# Consistent exception handling across all fetcher modules
 _RECOVERABLE_FETCH_EXCEPTIONS = (
     AttributeError,
     ImportError,
@@ -33,7 +42,16 @@ def _fetch_from_sources_instrument(
     include_localdb: bool = True,
     return_meta: bool = False,
 ) -> pd.DataFrame | tuple[pd.DataFrame, dict[str, Any]]:
-    """Fetch from active sources with smart fallback."""
+    """Fetch from active sources with smart fallback.
+
+    FIX 2026-02-26:
+    - Correlation ID for request tracking
+    - Error recording for adaptive rate limiting
+    - Consistent exception handling
+    """
+    correlation_id = f"src_{int(pd.Timestamp.now().timestamp() * 1000) % 1000000}"
+    symbol = inst.get("symbol", "unknown")
+
     sources = self._get_active_sources()
     if not include_localdb:
         sources = [
@@ -42,13 +60,13 @@ def _fetch_from_sources_instrument(
 
     if not sources:
         log.warning(
-            "No active sources for %s (%s), trying all as fallback",
-            inst.get("symbol"), interval,
+            "[%s] No active sources for %s (%s), trying all as fallback",
+            correlation_id, symbol, interval,
         )
         sources = [s for s in self._all_sources if s.name != "localdb"]
 
     if not sources:
-        log.warning("No sources at all for %s (%s)", inst.get("symbol"), interval)
+        log.warning("[%s] No sources at all for %s (%s)", correlation_id, symbol, interval)
         if return_meta:
             return pd.DataFrame(), {}
         return pd.DataFrame()
@@ -83,16 +101,13 @@ def _fetch_from_sources_instrument(
         expected = {"tencent", "akshare", "sina"}
         if not (expected & set(source_names_now)):
             log.debug(
-                "No expected CN online providers for %s (%s); active=%s",
-                inst.get("symbol"),
-                interval,
-                source_names_now,
+                "[%s] No expected CN online providers for %s (%s); active=%s",
+                correlation_id, symbol, interval, source_names_now,
             )
 
     log.debug(
-        "Sources for %s (%s): %s",
-        inst.get("symbol"), interval,
-        [s.name for s in sources],
+        "[%s] Sources for %s (%s): %s",
+        correlation_id, symbol, interval, [s.name for s in sources],
     )
 
     errors: list[str] = []
@@ -109,16 +124,16 @@ def _fetch_from_sources_instrument(
                 )
                 if df is None or df.empty:
                     log.debug(
-                        "%s returned empty for %s (%s)",
-                        source.name, inst.get("symbol"), interval,
+                        "[%s] %s returned empty for %s (%s)",
+                        correlation_id, source.name, symbol, interval,
                     )
                     continue
 
                 df = self._clean_dataframe(df, interval=interval)
                 if df.empty:
                     log.debug(
-                        "%s returned unusable rows for %s (%s)",
-                        source.name, inst.get("symbol"), interval,
+                        "[%s] %s returned unusable rows for %s (%s)",
+                        correlation_id, source.name, symbol, interval,
                     )
                     continue
 
@@ -131,8 +146,8 @@ def _fetch_from_sources_instrument(
                 min_required = max(5, min(days // 8, 20))
                 row_count = len(df)
                 log.debug(
-                    "%s: %d bars for %s (%s) [score=%.3f]",
-                    source.name, row_count, inst.get("symbol"),
+                    "[%s] %s: %d bars for %s (%s) [score=%.3f]",
+                    correlation_id, source.name, row_count, symbol,
                     interval, float(quality.get("score", 0.0)),
                 )
 
@@ -143,6 +158,9 @@ def _fetch_from_sources_instrument(
                     "quality": quality,
                     "rows":    row_count,
                 })
+
+                # Record success for rate limiting
+                self._record_source_success(source.name)
 
                 # For intraday, stop early when we have enough strong bars.
                 # Daily bars should keep collecting so multi-source consensus
@@ -156,9 +174,11 @@ def _fetch_from_sources_instrument(
 
             except _RECOVERABLE_FETCH_EXCEPTIONS as exc:
                 errors.append(f"{source.name}: {exc}")
+                # Record error for adaptive rate limiting
+                self._record_source_error(source.name)
                 log.debug(
-                    "%s failed for %s (%s): %s",
-                    source.name, inst.get("symbol"), interval, exc,
+                    "[%s] %s failed for %s (%s): %s",
+                    correlation_id, source.name, symbol, interval, exc,
                 )
                 continue
 

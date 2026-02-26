@@ -164,7 +164,7 @@ class TencentQuoteSource(DataSource):
                                             bse_limit = float(
                                                 PRICE_LIMITS.get("bse", 0.30) or 0.30
                                             )
-                                        except Exception:
+                                        except (ImportError, AttributeError, TypeError, ValueError):
                                             bse_limit = 0.30
                                         max_move = max(0.30, bse_limit) + 0.03
                                     if ratio > (1.0 + max_move) or ratio < (1.0 - max_move):
@@ -338,7 +338,7 @@ class TencentQuoteSource(DataSource):
         payload = None
         try:
             payload = json.loads(text)
-        except Exception:
+        except (json.JSONDecodeError, ValueError, TypeError):
             # Handle JSONP wrapper
             left = text.find("{")
             right = text.rfind("}")
@@ -346,7 +346,7 @@ class TencentQuoteSource(DataSource):
                 return pd.DataFrame()
             try:
                 payload = json.loads(text[left: right + 1])
-            except Exception:
+            except (json.JSONDecodeError, ValueError, TypeError):
                 return pd.DataFrame()
 
         if not isinstance(payload, dict):
@@ -406,7 +406,7 @@ class TencentQuoteSource(DataSource):
                 if len(row) > 6:
                     try:
                         amount = float(row[6] or 0)
-                    except Exception:
+                    except (ValueError, TypeError, OverflowError):
                         amount = close_px * max(0.0, vol)
                 else:
                     amount = close_px * max(0.0, vol)
@@ -420,7 +420,7 @@ class TencentQuoteSource(DataSource):
                     "volume": max(0.0, vol),
                     "amount": max(0.0, amount),
                 })
-            except Exception:
+            except (ValueError, TypeError, OverflowError, pd.errors.ParserError):
                 continue
 
         if not out_rows:

@@ -122,7 +122,7 @@ def _build_tencent_batch_url(template: str, symbols_csv: str) -> str:
     if "{symbols}" in tpl:
         try:
             return tpl.format(symbols=str(symbols_csv))
-        except Exception:
+        except (KeyError, ValueError, TypeError):
             return ""
     if tpl.endswith("="):
         return f"{tpl}{symbols_csv}"
@@ -147,7 +147,7 @@ def _build_tencent_daily_url(
                 vendor_symbol=str(vendor_symbol),
                 fetch_count=int(fetch_count),
             )
-        except Exception:
+        except (KeyError, ValueError, TypeError):
             return ""
     param = f"{vendor_symbol},day,,,{int(fetch_count)},qfq"
     if tpl.endswith("param="):
@@ -349,7 +349,7 @@ class DataSource:
             ):
                 try:
                     age = (now_dt - self.status.last_success).total_seconds()
-                except Exception:
+                except (TypeError, ValueError, OverflowError):
                     age = float("inf")
                 if age <= float(self._CB_RECENT_SUCCESS_DECAY_SEC):
                     self.status.consecutive_errors = max(
@@ -813,7 +813,8 @@ class AkShareSource(DataSource):
             return pd.DataFrame()
         try:
             return self._ak.stock_zh_a_spot_em()
-        except Exception:
+        except (ConnectionError, TimeoutError, OSError, RuntimeError, ValueError):
+            log.debug("AkShare get_all_stocks failed: network or data error")
             return pd.DataFrame()
 
     def _normalize_daily(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -997,7 +998,7 @@ class SinaHistorySource(DataSource):
             from core.constants import get_exchange
 
             ex = str(get_exchange(code6) or "").upper()
-        except Exception:
+        except (ImportError, AttributeError, TypeError, ValueError):
             ex = ""
         prefix = {"SSE": "sh", "SZSE": "sz", "BSE": "bj"}.get(ex)
         if prefix:
@@ -1037,8 +1038,11 @@ class SinaHistorySource(DataSource):
                 if frame is not None and not frame.empty:
                     return frame
                 errors.append(f"{url} empty")
-            except Exception as exc:
-                errors.append(f"{url} {exc}")
+            except (ConnectionError, TimeoutError, OSError, requests.RequestException) as exc:
+                errors.append(f"{url} network error: {exc}")
+                continue
+            except (ValueError, TypeError, KeyError) as exc:
+                errors.append(f"{url} data error: {exc}")
                 continue
 
         if errors:
@@ -1076,7 +1080,7 @@ class SinaHistorySource(DataSource):
     def _parse_json_like(text: str) -> object | None:
         try:
             return json.loads(text)
-        except Exception:
+        except (json.JSONDecodeError, ValueError, TypeError):
             pass
 
         # Handle JSONP wrappers or assignment wrappers.
@@ -1088,7 +1092,7 @@ class SinaHistorySource(DataSource):
             frag = text[left : right + 1]
             try:
                 return json.loads(frag)
-            except Exception:
+            except (json.JSONDecodeError, ValueError, TypeError):
                 continue
         return None
 
@@ -1145,7 +1149,7 @@ class SinaHistorySource(DataSource):
                         "amount": max(0.0, amount),
                     }
                 )
-            except Exception:
+            except (ValueError, TypeError, OverflowError):
                 continue
 
         if not out_rows:

@@ -494,9 +494,12 @@ class DataFetcher:
 
     def _rate_limit(self, source: str, interval: str = "1d") -> None:
         """Apply rate limiting with adaptive backoff.
-        
-        Uses enhanced rate limiter if available, otherwise falls back to
-        basic fixed-interval rate limiting.
+
+        FIX 2026-02-26:
+        - Consistent minimum wait times across all sources
+        - Exponential backoff on repeated failures
+        - Global rate limiting to prevent API abuse
+        FIX 2026-02-26 #2: Add bounds checking for backoff multiplier.
         """
         # Try enhanced rate limiter first
         if _HAS_RATE_LIMITER:
@@ -509,28 +512,63 @@ class DataFetcher:
             except _RECOVERABLE_FETCH_EXCEPTIONS as exc:
                 log.debug("Enhanced rate limiter failed, using fallback: %s", exc)
 
-        # Fallback to basic rate limiting
+        # Fallback to basic rate limiting with consistent intervals
         wait_time = 0.0
         with self._rate_lock:
             now = time.time()
             last = self._request_times.get(source, 0.0)
-            if source == "yahoo":
-                min_wait = 2.2 if interval in _INTRADAY_INTERVALS else 1.4
+
+            # FIX: Use consistent minimum wait times for all sources
+            # Intraday intervals need more conservative rate limiting
+            if interval in _INTRADAY_INTERVALS:
+                min_wait = max(self._intraday_interval, 1.5)
             else:
-                min_wait = (
-                    self._intraday_interval
-                    if interval in _INTRADAY_INTERVALS
-                    else self._min_interval
-                )
-            wait_time = min_wait - (now - last)
-            if wait_time < 0:
-                wait_time = 0.0
+                min_wait = max(self._min_interval, 0.5)
+
+            # Apply exponential backoff based on recent failures
+            # FIX 2026-02-26 #2: Cap backoff to prevent excessive waits
+            consecutive_errors = getattr(self, f"_consecutive_errors_{source}", 0)
+            if consecutive_errors > 0:
+                # Cap multiplier at 4x instead of 8x for more reasonable backoff
+                backoff_multiplier = min(2 ** consecutive_errors, 4)
+                min_wait *= backoff_multiplier
+                # Also cap absolute wait time to prevent hanging
+                min_wait = min(min_wait, 10.0)
+
+            elapsed = now - last
+            wait_time = max(0.0, min_wait - elapsed)
 
         if wait_time > 0:
             time.sleep(wait_time)
 
         with self._rate_lock:
             self._request_times[source] = time.time()
+
+    def _record_source_error(self, source: str) -> None:
+        """Record an error for a source to trigger backoff.
+
+        FIX 2026-02-26: Track consecutive errors for adaptive rate limiting.
+        """
+        # Safely handle cases where _rate_lock doesn't exist (e.g., tests)
+        if not hasattr(self, "_rate_lock"):
+            return
+        with self._rate_lock:
+            attr = f"_consecutive_errors_{source}"
+            current = getattr(self, attr, 0)
+            setattr(self, attr, min(current + 1, 5))
+
+    def _record_source_success(self, source: str) -> None:
+        """Record a success for a source to reset backoff.
+
+        FIX 2026-02-26: Reset error count on successful fetch.
+        """
+        # Safely handle cases where _rate_lock doesn't exist (e.g., tests)
+        if not hasattr(self, "_rate_lock"):
+            return
+        with self._rate_lock:
+            attr = f"_consecutive_errors_{source}"
+            if hasattr(self, attr):
+                setattr(self, attr, 0)
 
 
     def _db_is_fresh_enough(

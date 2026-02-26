@@ -73,6 +73,10 @@ class LLMAutoTrainWorker(QThread):
             min_cycle_samples = 1 if train_every_cycle else int(
                 self.config.get("min_new_articles", 24) or 24
             )
+            # FIX: Get accumulation settings
+            accumulate_data = bool(self.config.get("accumulate_training_data", True))
+            boost_ratio = float(self.config.get("corpus_boost_ratio", 0.5) or 0.5)
+            max_corpus_size = int(self.config.get("max_corpus_size", 5000) or 5000)
             cycle_index = 0
             total_collected = 0
             total_new = 0
@@ -115,6 +119,10 @@ class LLMAutoTrainWorker(QThread):
                     seen_ttl_hours=int(self.config.get("seen_ttl_hours", 168) or 168),
                     auto_related_search=True,
                     allow_gm_bootstrap=False,
+                    # FIX: Pass accumulation settings
+                    accumulate_training_data=bool(accumulate_data),
+                    corpus_boost_ratio=float(boost_ratio),
+                    max_corpus_size=int(max_corpus_size),
                 )
 
                 out = dict(report or {})
@@ -157,8 +165,11 @@ class LLMAutoTrainWorker(QThread):
                         (
                             f"Cycle {cycle_index} complete: collected={collected}, "
                             f"new={new_count}, trained={trained}, "
+                            f"historical={out.get('historical_articles', 0)}, "
+                            f"total_training={out.get('total_training_articles', 0)}, "
                             f"reused_skipped={reused_skipped}, "
                             f"only_new={int(only_new_mode)}, "
+                            f"accumulate={int(accumulate_data)}, "
                             f"queries={query_count}, related_codes={related_count}. "
                             f"Waiting {idle_seconds}s..."
                         ),
@@ -254,6 +265,37 @@ class LLMTrainDialog(QDialog):
         self.parallel_gm_check = QCheckBox("Train GM in parallel")
         self.parallel_gm_check.setChecked(False)
         settings.addWidget(self.parallel_gm_check, 3, 0, 1, 2)
+
+        # FIX: Add accumulation settings
+        self.accumulate_check = QCheckBox("Accumulate training data across cycles")
+        self.accumulate_check.setChecked(True)
+        self.accumulate_check.setToolTip(
+            "When enabled, training data is accumulated across cycles to build "
+            "a richer corpus. New data is combined with historical data for training."
+        )
+        settings.addWidget(self.accumulate_check, 4, 0, 1, 2)
+
+        settings.addWidget(QLabel("Historical Data Ratio:"), 5, 0)
+        self.boost_ratio_spin = QSpinBox()
+        self.boost_ratio_spin.setRange(0, 100)
+        self.boost_ratio_spin.setValue(50)
+        self.boost_ratio_spin.setSuffix("%")
+        self.boost_ratio_spin.setToolTip(
+            "Percentage of historical data to mix with new data each cycle. "
+            "50% means equal parts new and historical data."
+        )
+        settings.addWidget(self.boost_ratio_spin, 5, 1)
+
+        settings.addWidget(QLabel("Max Corpus Size:"), 6, 0)
+        self.max_corpus_spin = QSpinBox()
+        self.max_corpus_spin.setRange(500, 20000)
+        self.max_corpus_spin.setValue(5000)
+        self.max_corpus_spin.setSuffix(" articles")
+        self.max_corpus_spin.setToolTip(
+            "Maximum size of the persistent training corpus. "
+            "Oldest articles are pruned when this limit is reached."
+        )
+        settings.addWidget(self.max_corpus_spin, 6, 1)
 
         root.addWidget(settings_group)
 
@@ -351,6 +393,9 @@ class LLMTrainDialog(QDialog):
             self.limit_spin.setEnabled(False)
             self.max_samples_spin.setEnabled(False)
             self.parallel_gm_check.setEnabled(False)
+            self.accumulate_check.setEnabled(False)
+            self.boost_ratio_spin.setEnabled(False)
+            self.max_corpus_spin.setEnabled(False)
             return
 
         self.start_btn.setEnabled(True)
@@ -361,6 +406,9 @@ class LLMTrainDialog(QDialog):
         self.limit_spin.setEnabled(True)
         self.max_samples_spin.setEnabled(True)
         self.parallel_gm_check.setEnabled(True)
+        self.accumulate_check.setEnabled(True)
+        self.boost_ratio_spin.setEnabled(True)
+        self.max_corpus_spin.setEnabled(True)
         self.worker = None
 
     def _start_training(self, resume: bool = False) -> None:
@@ -377,6 +425,10 @@ class LLMTrainDialog(QDialog):
             "max_samples": int(self.max_samples_spin.value()),
             "train_every_cycle": True,
             "min_new_articles": 1,
+            # FIX: Add accumulation settings
+            "accumulate_training_data": bool(self.accumulate_check.isChecked()),
+            "corpus_boost_ratio": float(self.boost_ratio_spin.value()) / 100.0,
+            "max_corpus_size": int(self.max_corpus_spin.value()),
         }
 
         self.status_label.setText("Resuming..." if is_resume else "Starting...")

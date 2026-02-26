@@ -376,6 +376,8 @@ class RealTimeNewsWidget(QWidget):
     def _add_article_to_list(self, article_data: dict[str, Any]) -> None:
         """Add article to QListWidget.
         
+        China-optimized: Pre-caches lowercase fields for faster searching.
+
         Args:
             article_data: Article dictionary
         """
@@ -383,26 +385,32 @@ class RealTimeNewsWidget(QWidget):
         channel = article_data.get("category", "market")
         if self._current_channel != "all" and channel != self._current_channel:
             return
-        
-        # Filter by search
+
+        # Pre-cache lowercase fields for faster search (China-optimized)
+        if "_title_lower" not in article_data:
+            article_data["_title_lower"] = article_data.get("title", "").lower()
+        if "_summary_lower" not in article_data:
+            article_data["_summary_lower"] = article_data.get("summary", "").lower()
+
+        # Filter by search (using cached lowercase fields)
         search_text = self.search_box.text().lower()
         if search_text:
-            title = article_data.get("title", "").lower()
-            summary = article_data.get("summary", "").lower()
+            title = article_data.get("_title_lower", "")
+            summary = article_data.get("_summary_lower", "")
             if search_text not in title and search_text not in summary:
                 return
-        
+
         # Create widget
         item = QListWidgetItem(self.news_list)
         widget = NewsListItemWidget(article_data)
         item.setSizeHint(widget.sizeHint())
         self.news_list.addItem(item)
         self.news_list.setItemWidget(item, widget)
-        
+
         # Auto-scroll to bottom
         if self._auto_scroll:
             self.news_list.scrollToBottom()
-        
+
         self._update_count()
     
     def _on_item_clicked(self, item: QListWidgetItem) -> None:
@@ -439,16 +447,65 @@ class RealTimeNewsWidget(QWidget):
     def _on_search_changed(self, text: str) -> None:
         """Handle search text change.
         
+        China-optimized: Debounced search to reduce UI lag with large datasets.
+
         Args:
             text: Search text
         """
-        self._refresh_list()
+        # Debounce search to avoid lag during typing
+        if hasattr(self, '_search_debounce_timer'):
+            self._search_debounce_timer.stop()
+        
+        # Use QTimer for debouncing (300ms delay)
+        if not hasattr(self, '_search_debounce_timer'):
+            from PyQt6.QtCore import QTimer
+            self._search_debounce_timer = QTimer()
+            self._search_debounce_timer.setSingleShot(True)
+            self._search_debounce_timer.timeout.connect(self._execute_search)
+        
+        self._search_debounce_timer.start(300)
     
+    def _execute_search(self) -> None:
+        """Execute the actual search after debounce."""
+        self._refresh_list()
+
     def _refresh_list(self) -> None:
-        """Refresh list with current filters."""
+        """Refresh list with current filters.
+        
+        China-optimized: Improved search performance with pre-computed lowercase cache.
+        """
         self.news_list.clear()
+
+        # Pre-compute search text for efficiency
+        search_text = self.search_box.text().lower().strip() if self.search_box else ""
+        
+        # Channel filter
+        channel_filter = self._current_channel if self._current_channel != "all" else None
         
         for article_data in self._articles:
+            # Fast channel filtering
+            if channel_filter:
+                article_channel = article_data.get("category", "market")
+                if article_channel != channel_filter:
+                    continue
+            
+            # Fast search filtering with early exit
+            if search_text:
+                # Check cached lowercase fields first if available
+                title_lower = article_data.get("_title_lower", "")
+                summary_lower = article_data.get("_summary_lower", "")
+                
+                # Cache lowercase versions if not already cached
+                if not title_lower:
+                    title_lower = article_data.get("title", "").lower()
+                    article_data["_title_lower"] = title_lower
+                if not summary_lower:
+                    summary_lower = article_data.get("summary", "").lower()
+                    article_data["_summary_lower"] = summary_lower
+                
+                if search_text not in title_lower and search_text not in summary_lower:
+                    continue
+            
             self._add_article_to_list(article_data)
     
     def _toggle_auto_scroll(self, checked: bool) -> None:

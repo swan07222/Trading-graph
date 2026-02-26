@@ -258,55 +258,77 @@ class EnsembleModel:
 
     def _normalize_weights(self) -> None:
         """Normalize ensemble weights with comprehensive validation.
-        
+
         FIX NORM: Handle empty weights dict, zero weights, and NaN/Inf
         to prevent crashes and ensure stable ensemble predictions.
+        
+        FIX #NORM-001: Added stricter validation for weight values
+        to prevent propagation of invalid numerical values.
+        
+        FIX #NORM-002: Added minimum weight floor to prevent complete
+        starvation of any model (allows recovery if model improves).
         """
         if not self.weights:
             log.debug("No weights to normalize")
             return
-        
-        # FIX: Filter out NaN/Inf values
-        clean_weights = {}
+
+        # FIX: Filter out NaN/Inf values and negative weights
+        clean_weights: dict[str, float] = {}
         for k, v in self.weights.items():
             try:
                 val = float(v)
-                if np.isfinite(val) and val >= 0:
+                # FIX #NORM-001: Stricter validation
+                if np.isfinite(val) and val >= 0.0:
                     clean_weights[k] = val
                 else:
                     log.debug("Filtering invalid weight for %s: %s", k, v)
             except (TypeError, ValueError):
                 log.debug("Filtering non-numeric weight for %s", k)
+
+        n_original = len(self.weights)
         
         if not clean_weights:
             # All weights were invalid - reset to uniform
-            n = len(self.weights)
-            if n > 0:
-                self.weights = {k: 1.0 / n for k in self.weights}
-                log.info("Reset all weights to uniform (1/%d)", n)
+            if n_original > 0:
+                uniform = 1.0 / float(n_original)
+                self.weights = {k: uniform for k in self.weights}
+                log.info("Reset all weights to uniform (1/%d)", n_original)
             return
-        
+
+        n_clean = len(clean_weights)
         total = sum(clean_weights.values())
-        
+
         # FIX: Handle zero or near-zero total
         if total <= _EPS:
-            n = len(clean_weights)
-            if n > 0:
-                self.weights = {k: 1.0 / n for k in clean_weights}
+            if n_clean > 0:
+                uniform = 1.0 / float(n_clean)
+                self.weights = {k: uniform for k in clean_weights}
                 log.info("Reset weights to uniform (total was ~0)")
             return
-        
+
         # Normalize
         self.weights = {k: v / total for k, v in clean_weights.items()}
+
+        # FIX #NORM-002: Apply minimum weight floor (prevent starvation)
+        min_weight = 0.02  # No model gets less than 2% weight
+        for k in self.weights:
+            if self.weights[k] < min_weight:
+                self.weights[k] = min_weight
         
-        # FIX: Verify normalization
+        # Re-normalize after applying floor
         total_after = sum(self.weights.values())
-        if abs(total_after - 1.0) > 1e-6:
-            log.warning("Weight normalization error: total=%s", total_after)
-            # Re-normalize with higher precision
-            total = sum(self.weights.values())
-            if total > 0:
-                self.weights = {k: v / total for k, v in self.weights.items()}
+        if total_after > 0:
+            self.weights = {k: v / total_after for k, v in self.weights.items()}
+
+        # FIX: Verify normalization with stricter tolerance
+        final_total = sum(self.weights.values())
+        if abs(final_total - 1.0) > 1e-6:
+            log.warning("Weight normalization error: final_total=%s", final_total)
+            # Emergency fallback to uniform
+            n = len(self.weights)
+            if n > 0:
+                uniform = 1.0 / float(n)
+                self.weights = {k: uniform for k in self.weights}
 
     # ------------------------------------------------------------------
     # ------------------------------------------------------------------
@@ -388,17 +410,30 @@ class EnsembleModel:
 
         # FIX #CAL-001: Finer temperature grid with more granularity
         # Extended range and finer steps for better calibration precision
+        # FIX #CAL-002: Added more granular steps around T=1.0 where optimal
+        # temperature typically lies for well-calibrated models
         temp_grid = [
             0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5,
             0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0,
-            1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0, 5.0, 7.5, 10.0,
+            1.02, 1.05, 1.08, 1.1, 1.15, 1.2, 1.25, 1.3, 1.4, 1.5,
+            1.6, 1.7, 1.8, 1.9, 2.0, 2.25, 2.5, 2.75, 3.0, 3.5,
+            4.0, 5.0, 6.0, 7.5, 10.0,
         ]
 
         for temp in temp_grid:
-            nll = F.cross_entropy(combined_logits / temp, combined_labels).item()
-            if nll < best_nll:
-                best_nll = nll
-                best_temp = temp
+            try:
+                nll = F.cross_entropy(combined_logits / temp, combined_labels).item()
+                if np.isfinite(nll) and nll < best_nll:
+                    best_nll = nll
+                    best_temp = temp
+            except (RuntimeError, ValueError, OverflowError):
+                # Skip temperatures that cause numerical issues
+                continue
+        
+        # FIX #CAL-003: Validate final temperature is reasonable
+        if not np.isfinite(best_temp) or best_temp <= 0:
+            best_temp = 1.0
+            log.warning("Temperature calibration produced invalid result, using default T=1.0")
 
         with self._lock:
             self.temperature = best_temp
@@ -922,24 +957,80 @@ class EnsembleModel:
             # with the models check above, but defensive)
             if weighted_logits is None:
                 log.warning(f"No logits produced for batch {start}:{end}")
+                # FIX #PRED-001: Still create valid predictions for skipped batch
+                # to maintain batch size consistency
+                for i in range(end - start):
+                    # Create uniform distribution as fallback
+                    probs = np.full(num_classes, 1.0 / num_classes, dtype=np.float64)
+                    results.append(
+                        EnsemblePrediction(
+                            probabilities=probs,
+                            predicted_class=1,  # Neutral
+                            confidence=0.33,
+                            raw_confidence=0.33,
+                            entropy=1.0,  # Maximum entropy
+                            agreement=0.0,
+                            margin=0.0,
+                            brier_score=0.67,
+                            individual_predictions={},
+                        )
+                    )
                 continue
 
             final_probs = F.softmax(weighted_logits / temp, dim=-1).cpu().numpy()
+            
+            # FIX #PRED-002: Validate softmax output
+            if final_probs is None or final_probs.size == 0:
+                log.warning(f"Softmax produced empty output for batch {start}:{end}")
+                for i in range(end - start):
+                    probs = np.full(num_classes, 1.0 / num_classes, dtype=np.float64)
+                    results.append(
+                        EnsemblePrediction(
+                            probabilities=probs,
+                            predicted_class=1,
+                            confidence=0.33,
+                            raw_confidence=0.33,
+                            entropy=1.0,
+                            agreement=0.0,
+                            margin=0.0,
+                            brier_score=0.67,
+                            individual_predictions={},
+                        )
+                    )
+                continue
 
             for i in range(end - start):
                 probs = final_probs[i]
+                
+                # FIX #PRED-003: Validate probability distribution
+                if probs is None or len(probs) == 0:
+                    probs = np.full(num_classes, 1.0 / num_classes, dtype=np.float64)
+                elif not np.all(np.isfinite(probs)):
+                    # Replace NaN/Inf with uniform
+                    probs = np.nan_to_num(probs, nan=1.0/num_classes, posinf=0.0, neginf=0.0)
+                    # Renormalize
+                    prob_sum = probs.sum()
+                    if prob_sum > 0:
+                        probs = probs / prob_sum
+                    else:
+                        probs = np.full(num_classes, 1.0 / num_classes, dtype=np.float64)
+                
                 pred_cls = int(np.argmax(probs))
                 raw_conf = float(np.max(probs))
 
-                probs_safe = np.clip(probs, 1e-8, 1.0)
+                # FIX #PRED-004: Safe entropy calculation with clipping
+                probs_safe = np.clip(probs, 1e-8, 1.0 - 1e-8)
                 ent = float(-np.sum(probs_safe * np.log(probs_safe)))
-                ent_norm = ent / max_entropy if max_entropy > 0 else 0.0
+                ent_norm = ent / max_entropy if max_entropy > _EPS else 0.0
+                ent_norm = float(np.clip(ent_norm, 0.0, 1.0))
 
                 sorted_probs = np.sort(probs)
                 margin = float(sorted_probs[-1] - sorted_probs[-2]) if len(sorted_probs) >= 2 else 0.0
+                margin = float(np.clip(margin, 0.0, 1.0))
 
                 model_preds = [
                     int(np.argmax(per_model_probs[m][i])) for m in per_model_probs
+                    if m in per_model_probs and len(per_model_probs[m][i]) > 0
                 ]
                 if model_preds:
                     most_common = max(set(model_preds), key=model_preds.count)
@@ -953,8 +1044,8 @@ class EnsembleModel:
                 ent_penalty = max(0.0, min(1.0, 1.0 - 0.25 * ent_norm))
                 base_conf = max(0.0, min(1.0, raw_conf * rel * ent_penalty))
                 # Margin influences confidence without saturating high-end scores.
-                conf = base_conf + ((1.0 - base_conf) * float(np.clip(margin, 0.0, 1.0)) * 0.08)
-                conf = max(0.0, min(0.999, conf))
+                conf = base_conf + ((1.0 - base_conf) * margin * 0.08)
+                conf = float(np.clip(conf, 0.0, 0.999))
 
                 target = np.zeros_like(probs)
                 target[pred_cls] = 1.0
@@ -968,7 +1059,7 @@ class EnsembleModel:
                         predicted_class=pred_cls,
                         confidence=conf,
                         raw_confidence=raw_conf,
-                        entropy=float(ent_norm),
+                        entropy=ent_norm,
                         agreement=float(agreement),
                         margin=margin,
                         brier_score=brier,

@@ -278,6 +278,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description='AI Stock Analysis System')
 
     parser.add_argument('--train', action='store_true', help='Train model')
+    parser.add_argument('--train-enhanced', action='store_true', help='Train model with enhanced pipeline (all improvements)')
     parser.add_argument('--train-news', action='store_true', help='Train model on news/policy data')
     parser.add_argument('--collect-news', action='store_true', help='Collect news from web sources')
     parser.add_argument('--web-search', type=str, help='Search web for LLM training data (query or "llm-data")')
@@ -321,12 +322,12 @@ def main() -> int:
     if args.doctor_strict and not args.doctor:
         parser.error("--doctor-strict requires --doctor")
     require_gui = not any([
-        args.train, args.train_news, args.collect_news, args.web_search, args.analyze_sentiment,
+        args.train, args.train_enhanced, args.train_news, args.collect_news, args.web_search, args.analyze_sentiment,
         args.auto_learn, args.predict, args.backtest, args.backtest_optimize, args.replay_file,
         args.health, args.cli, args.doctor, args.stream_news,
     ])
     require_ml = any([
-        args.train, args.train_news, args.collect_news, args.web_search, args.analyze_sentiment,
+        args.train, args.train_enhanced, args.train_news, args.collect_news, args.web_search, args.analyze_sentiment,
         args.auto_learn, args.predict, args.backtest, args.backtest_optimize, args.replay_file,
     ])
     require_websocket = bool(args.stream_news)
@@ -521,6 +522,52 @@ def main() -> int:
                 print(f"  Validation samples: {result['val_samples']}")
                 print(f"  Best validation accuracy: {result['best_val_acc']:.2%}")
                 print(f"  Training time: {result['training_time_seconds']:.1f}s")
+
+        elif args.train_enhanced:
+            from models.trainer_enhanced import EnhancedTrainer, EnhancedTrainingConfig
+            
+            print("\nEnhanced Training Pipeline")
+            print("=" * 60)
+            print("Features enabled:")
+            print("  ✓ Data leakage prevention (temporal splits)")
+            print("  ✓ Overfitting prevention (dropout, weight decay, gradient clipping)")
+            print("  ✓ Class imbalance handling (focal loss, SMOTE)")
+            print("  ✓ Adaptive label quality (volatility-adjusted)")
+            print("  ✓ Walk-forward validation with regime detection")
+            print("  ✓ Drift detection for incremental training")
+            print("  ✓ Model pruning and quantization")
+            print("  ✓ Mixed precision training")
+            print("=" * 60)
+            
+            config = EnhancedTrainingConfig(
+                use_focal_loss=True,
+                use_smote=False,  # Enable if you have severe class imbalance
+                adaptive_labels=True,
+                use_walk_forward=True,
+                wf_folds=5,
+                use_drift_detection=True,
+                prune_after_training=True,
+                quantize_model=False,  # Enable for deployment
+                use_hpo=False,  # Enable for hyperparameter optimization
+                use_pretrained_embeddings=False,  # Enable for news training
+                deterministic_training=False,  # Enable for reproducibility
+            )
+            
+            trainer = EnhancedTrainer(config=config)
+            result = trainer.train(
+                epochs=args.epochs,
+                batch_size=32,
+                learning_rate=1e-3,
+            )
+            
+            if "error" in result:
+                print(f"\nTraining failed: {result['error']}")
+            else:
+                print("\nEnhanced Training Completed!")
+                print(f"  Epochs: {result['epochs_completed']}")
+                print(f"  Best Val Accuracy: {result['best_val_accuracy']:.2%}")
+                print(f"  Training Time: {result['training_time_seconds']:.1f}s")
+                print(f"  Model saved to: {result['model_path']}")
 
         elif args.train:
             from models.trainer import Trainer

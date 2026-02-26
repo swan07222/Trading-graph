@@ -9,6 +9,7 @@ This module provides comprehensive validation for:
 """
 
 import math
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -521,7 +522,3 @@ def validate_bars(
 def validate_quote(quote: Any, symbol: str = "") -> ValidationResult:
     """Validate a quote using global validator."""
     return get_validator().validate_quote(quote, symbol)
-
-
-# Import threading for the lock
-import threading

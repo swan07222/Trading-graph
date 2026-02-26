@@ -190,6 +190,7 @@ class MarketDatabase:
         FIX #3: Called under _connections_lock by the caller.
         FIX #10: Register atexit handler to ensure all connections are closed on shutdown.
         FIX #8: Add logging for connection cleanup monitoring.
+        FIX #2026-02-26: Handle edge cases where connection is already closed.
         """
         alive_ids = {
             t.ident for t in threading.enumerate() if t.ident is not None
@@ -200,17 +201,26 @@ class MarketDatabase:
             if tid not in alive_ids
         ]
         cleaned_count = 0
+        error_count = 0
         for tid in dead_ids:
             conn = self._connections.pop(tid, None)
             if conn is not None:
                 try:
-                    conn.close()
+                    # Check if connection is already closed before attempting to close
+                    if not getattr(conn, '_closed', False):
+                        conn.close()
                     cleaned_count += 1
-                except (sqlite3.Error, OSError):
-                    pass
-        
-        if cleaned_count > 0:
-            log.debug(f"Cleaned up {cleaned_count} dead thread database connections")
+                except (sqlite3.Error, OSError, TypeError) as e:
+                    # Connection might already be closed or invalid
+                    error_count += 1
+                    log.debug(f"Connection cleanup error for thread {tid}: {e}")
+
+        total_cleaned = cleaned_count + error_count
+        if total_cleaned > 0:
+            log.debug(
+                f"Cleaned up {total_cleaned} dead thread database connections "
+                f"({cleaned_count} ok, {error_count} errors)"
+            )
 
     @contextmanager
     def _transaction(self):

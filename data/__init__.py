@@ -5,6 +5,25 @@ def __getattr__(name: str):
     _CACHE = {'TieredCache', 'get_cache', 'cached', 'CacheStats'}
     _DATABASE = {'MarketDatabase', 'get_database'}
     _FETCHER = {'DataFetcher', 'Quote', 'get_fetcher'}
+    _FETCHER_UNIFIED = {
+        'UnifiedDataFetcher', 'FetchOptions', 'FetchResult', 'LoadStatus',
+        'get_unified_fetcher', 'fetch_unified',
+    }
+    _FETCHER_CONFIG = {'FetcherConfig', 'get_config'}
+    _SOURCE_HEALTH = {
+        'DataSourceHealthMonitor', 'SourceHealthStatus', 'SourceHealthState',
+        'get_health_monitor', 'record_source_success', 'record_source_failure',
+        'get_healthy_source',
+    }
+    _TIMEZONE_UTILS = {
+        'TradingSessionChecker', 'TimezoneConverter',
+        'get_session_checker', 'get_timezone_converter',
+        'is_trading_time', 'filter_trading_hours', 'ensure_shanghai_datetime',
+    }
+    _PROGRESSIVE_LOADER = {
+        'ProgressiveDataLoader', 'LoadResult', 'LoadStatus',
+        'get_progressive_loader', 'load_with_progressive',
+    }
     _FEATURES = {'FeatureEngine'}
     _PROCESSOR = {'DataProcessor'}
     _DISCOVERY = {'UniversalStockDiscovery', 'DiscoveredStock'}
@@ -36,6 +55,26 @@ def __getattr__(name: str):
     if name in _FETCHER:
         from . import fetcher as _fetcher
         return getattr(_fetcher, name)
+
+    if name in _FETCHER_UNIFIED:
+        from . import fetcher_unified as _fetcher_unified
+        return getattr(_fetcher_unified, name)
+
+    if name in _FETCHER_CONFIG:
+        from . import fetcher_config as _fetcher_config
+        return getattr(_fetcher_config, name)
+
+    if name in _SOURCE_HEALTH:
+        from . import source_health as _source_health
+        return getattr(_source_health, name)
+
+    if name in _TIMEZONE_UTILS:
+        from . import timezone_utils as _timezone_utils
+        return getattr(_timezone_utils, name)
+
+    if name in _PROGRESSIVE_LOADER:
+        from . import progressive_loader as _progressive_loader
+        return getattr(_progressive_loader, name)
 
     if name in _FEATURES:
         from .features import FeatureEngine
@@ -85,6 +124,36 @@ __all__ = [
     'DataFetcher',
     'Quote',
     'get_fetcher',
+    # Unified fetcher (FIX 2026-02-26)
+    'UnifiedDataFetcher',
+    'FetchOptions',
+    'FetchResult',
+    'get_unified_fetcher',
+    'fetch_unified',
+    'FetcherConfig',
+    'get_config',
+    # Source health
+    'DataSourceHealthMonitor',
+    'SourceHealthStatus',
+    'SourceHealthState',
+    'get_health_monitor',
+    'record_source_success',
+    'record_source_failure',
+    'get_healthy_source',
+    # Timezone utilities
+    'TradingSessionChecker',
+    'TimezoneConverter',
+    'get_session_checker',
+    'get_timezone_converter',
+    'is_trading_time',
+    'filter_trading_hours',
+    'ensure_shanghai_datetime',
+    # Progressive loading
+    'ProgressiveDataLoader',
+    'LoadResult',
+    'LoadStatus',
+    'get_progressive_loader',
+    'load_with_progressive',
     'FeatureEngine',
     'DataProcessor',
     'UniversalStockDiscovery',

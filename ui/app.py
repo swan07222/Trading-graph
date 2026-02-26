@@ -45,7 +45,11 @@ from core.types import (
     AutoTradeMode,
     OrderSide,
 )
-from ui import app_ai_ops as _app_ai_ops
+# Use enhanced AI ops with improved NLU, persistence, and async processing
+try:
+    from ui import app_ai_ops_enhanced as _app_ai_ops
+except ImportError:
+    from ui import app_ai_ops as _app_ai_ops
 from ui import app_analysis_ops as _app_analysis_ops
 from ui import app_bar_ops as _app_bar_ops
 from ui import app_feed_ops as _app_feed_ops
@@ -141,10 +145,24 @@ class MainApp(MainAppCommonMixin, QMainWindow):
     - Real-time signal monitoring with multiple intervals
     - Custom AI model with ensemble neural networks
     - Professional modern theme
-    - AI-generated price forecast curves
+    - AI-generated price forecast curves with uncertainty bands
     """
     MAX_WATCHLIST_SIZE = 50
-    GUESS_FORECAST_BARS = 30
+    
+    # Dynamic forecast horizon based on interval (configurable via env)
+    # Format: interval=steps pairs, e.g., "1m=60,5m=40,15m=30,1h=24,1d=30"
+    GUESS_FORECAST_BARS_CONFIG = {
+        "1m": 60,   # 1-hour forecast for 1-minute bars
+        "2m": 50,
+        "3m": 45,
+        "5m": 40,   # ~3.3 hours forecast
+        "15m": 32,  # ~8 hours forecast
+        "30m": 28,  # ~14 hours forecast
+        "60m": 24,  # ~24 hours forecast
+        "1h": 24,
+        "1d": 30,   # ~30 trading days forecast
+    }
+    
     STARTUP_INTERVAL = "1m"
 
     bar_received = pyqtSignal(str, dict)
@@ -206,6 +224,11 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         self._startup_loading_active = False
         self._ai_chat_history: list[dict[str, str]] = []
         self._news_policy_signal_cache: dict[str, dict[str, Any]] = {}
+
+        # FIX #4: Prediction cache for graceful degradation when models unavailable
+        self._prediction_cache: dict[str, dict[str, Any]] = {}
+        self._prediction_cache_ttl: int = 300  # 5 minutes cache TTL
+        self._prediction_cache_max_size: int = 50  # Max cached predictions
 
         # Auto-trade state
         self._auto_trade_mode: AutoTradeMode = AutoTradeMode.MANUAL
@@ -778,8 +801,9 @@ class MainApp(MainAppCommonMixin, QMainWindow):
                 self.interval_combo.setCurrentText(interval)
             finally:
                 self.interval_combo.blockSignals(False)
-            # Always start with 30-step guess horizon for live chart forecasting.
-            self.forecast_spin.setValue(int(self.GUESS_FORECAST_BARS))
+            # Dynamic forecast horizon based on interval for better predictions
+            forecast_bars = self._get_forecast_horizon_for_interval(interval)
+            self.forecast_spin.setValue(int(forecast_bars))
             self.lookback_spin.setValue(self._recommended_lookback(interval))
             horizon = int(self.forecast_spin.value())
 
@@ -1174,6 +1198,31 @@ class MainApp(MainAppCommonMixin, QMainWindow):
 
 
 
+
+    def _get_forecast_horizon_for_interval(self, interval: str) -> int:
+        """Get dynamic forecast horizon based on interval.
+        
+        Args:
+            interval: Time interval string (e.g., '1m', '5m', '1h', '1d')
+            
+        Returns:
+            Number of forecast bars appropriate for the interval
+        """
+        interval = str(interval).strip().lower()
+        
+        # Normalize interval aliases
+        interval_aliases = {
+            "1h": "60m",
+            "60min": "60m",
+            "60mins": "60m",
+            "daily": "1d",
+            "1day": "1d",
+            "day": "1d",
+        }
+        interval = interval_aliases.get(interval, interval)
+        
+        # Get from config or default to 30
+        return int(self.GUESS_FORECAST_BARS_CONFIG.get(interval, 30))
 
     def _refresh_all(self) -> None:
         self._update_watchlist()

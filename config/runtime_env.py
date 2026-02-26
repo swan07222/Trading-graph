@@ -32,3 +32,19 @@ def env_int(name: str, default: int = 0) -> int:
         return int(text)
     except (TypeError, ValueError):
         return int(default)
+
+
+def env_float(name: str, default: str = "0") -> float:
+    """Read float env values with safe fallback on invalid input."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return float(default)
+
+    text = str(raw).strip()
+    if not text:
+        return float(default)
+
+    try:
+        return float(text)
+    except (TypeError, ValueError):
+        return float(default)

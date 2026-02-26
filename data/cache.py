@@ -711,7 +711,7 @@ class TieredCache:
 
         try:
             return deepcopy(value)
-        except Exception:
+        except (TypeError, AttributeError, RecursionError):
             return value
 
     def get(self, key: str, max_age_hours: float = None) -> Any:

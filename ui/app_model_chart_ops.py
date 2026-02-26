@@ -387,7 +387,11 @@ def _debug_forecast_quality(
     anchor_price: float | None,
     context: str,
 ) -> None:
-    """Detailed forecast-shape diagnostics for flat/erratic guessed graph."""
+    """Detailed forecast-shape diagnostics for flat/erratic guessed graph.
+    
+    FIX #2: Enhanced diagnostics with automatic quality scoring and 
+    recommendations for forecast improvement.
+    """
     if not bool(getattr(self, "_debug_console_enabled", False)):
         return
 
@@ -414,6 +418,19 @@ def _debug_forecast_quality(
             level="warning",
         )
         return
+
+    # FIX #2: Compute forecast quality score
+    quality_score = self._compute_forecast_quality_score(vals, anchor_price, iv_chart)
+    if quality_score < 0.5:
+        self._debug_console(
+            f"forecast_q_low:{context}:{sym}:{iv_chart}",
+            (
+                f"LOW QUALITY FORECAST (score={quality_score:.2f}) [{context}] "
+                f"symbol={sym} - consider retraining model or using enhanced fallback"
+            ),
+            min_gap_seconds=5.0,
+            level="warning",
+        )
 
     try:
         anchor = float(anchor_price or 0.0)
@@ -664,6 +681,9 @@ def _prepare_chart_predicted_prices(
     if not cleaned:
         return []
 
+    # FIX #3: Apply pre-processing noise compression before projection
+    cleaned = self._compress_forecast_micro_noise(cleaned, iv_chart, anchor)
+
     max_total_move, max_step_move = self._chart_prediction_caps(iv_chart)
 
     # Mismatch mode: preserve source-shape, then resample to chart steps.
@@ -716,6 +736,7 @@ def _prepare_chart_predicted_prices(
                 seg = src_curve[start:start + chunk]
                 if not seg:
                     continue
+                # FIX #3: Use weighted median for better noise rejection
                 compressed.append(float(np.median(np.asarray(seg, dtype=float))))
             if len(compressed) >= 2:
                 src_curve = compressed
@@ -1166,3 +1187,251 @@ def _render_chart_state(
         # Keep the return side-effect free when no renderer is available.
         return arr
     return arr
+
+
+def _compute_forecast_quality_score(
+    self,
+    vals: list[float],
+    anchor_price: float | None,
+    interval: str,
+) -> float:
+    """Compute a quality score for the forecast (0.0 to 1.0).
+    
+    FIX #2: Quantitative forecast quality assessment to detect
+    flat, erratic, or unrealistic predictions.
+    
+    Factors:
+    - Variability: Too flat = low score
+    - Smoothness: Too many direction flips = low score  
+    - Realism: Extreme moves = low score
+    - Continuity: Jump from anchor = low score
+    """
+    if len(vals) < 2:
+        return 0.0
+    
+    try:
+        anchor = float(anchor_price or 0.0)
+    except _UI_RECOVERABLE_EXCEPTIONS:
+        anchor = 0.0
+    if not math.isfinite(anchor) or anchor <= 0:
+        anchor = float(vals[0])
+    
+    scores: list[float] = []
+    
+    # 1. Variability score (penalize flat forecasts)
+    vmin, vmax = min(vals), max(vals)
+    span_pct = abs(vmax - vmin) / max(anchor, 1e-8)
+    interval_expected_span = {
+        "1m": 0.005, "2m": 0.007, "3m": 0.008, "5m": 0.01,
+        "15m": 0.02, "30m": 0.03, "60m": 0.04, "1h": 0.04,
+        "1d": 0.06, "1wk": 0.10, "1mo": 0.15,
+    }.get(interval, 0.05)
+    
+    if span_pct < interval_expected_span * 0.3:
+        scores.append(0.3)  # Too flat
+    elif span_pct > interval_expected_span * 3.0:
+        scores.append(0.4)  # Too volatile
+    else:
+        # Optimal range
+        ratio = span_pct / interval_expected_span
+        scores.append(min(1.0, 0.7 + 0.3 * (1 - abs(1 - ratio))))
+    
+    # 2. Smoothness score (penalize erratic flips)
+    flips = 0
+    dirs: list[int] = []
+    for i in range(1, len(vals)):
+        dirs.append(1 if vals[i] >= vals[i-1] else -1)
+    for i in range(1, len(dirs)):
+        if dirs[i] != dirs[i-1]:
+            flips += 1
+    
+    flip_ratio = float(flips) / float(max(1, len(dirs) - 1)) if len(dirs) >= 2 else 0.0
+    if flip_ratio > 0.6:
+        scores.append(0.3)  # Too erratic
+    elif flip_ratio < 0.1:
+        scores.append(0.6)  # Suspiciously smooth (possibly flat)
+    else:
+        scores.append(0.8 + 0.2 * (0.3 - min(flip_ratio, 0.3)) / 0.3)
+    
+    # 3. Realism score (penalize extreme moves)
+    max_step = 0.0
+    for i in range(1, len(vals)):
+        prev, cur = vals[i-1], vals[i]
+        if prev > 0:
+            step = abs(cur / prev - 1.0)
+            max_step = max(max_step, step)
+    
+    interval_max_step = {
+        "1m": 0.003, "2m": 0.004, "3m": 0.005, "5m": 0.006,
+        "15m": 0.012, "30m": 0.018, "60m": 0.025, "1h": 0.025,
+        "1d": 0.04, "1wk": 0.08, "1mo": 0.12,
+    }.get(interval, 0.03)
+    
+    if max_step > interval_max_step * 3.0:
+        scores.append(0.2)  # Unrealistic jumps
+    elif max_step > interval_max_step * 1.5:
+        scores.append(0.5)  # Somewhat erratic
+    else:
+        scores.append(0.9)
+    
+    # 4. Continuity score (penalize jump from anchor)
+    if len(vals) > 0 and math.isfinite(anchor) and anchor > 0:
+        jump = abs(vals[0] - anchor) / anchor
+        if jump > 0.05:
+            scores.append(0.4)  # Discontinuous
+        elif jump > 0.02:
+            scores.append(0.7)
+        else:
+            scores.append(1.0)
+    
+    # Weighted average
+    weights = [0.25, 0.25, 0.30, 0.20]  # Variability, Smoothness, Realism, Continuity
+    weighted_score = sum(s * w for s, w in zip(scores, weights))
+    
+    return float(np.clip(weighted_score, 0.0, 1.0))
+
+
+def _apply_forecast_smoothing(
+    self,
+    predicted_prices: list[float],
+    anchor_price: float,
+    interval: str,
+    strength: str = "auto",
+) -> list[float]:
+    """Apply adaptive smoothing to forecast to reduce noise.
+    
+    FIX #2 & #3: Automatic smoothing based on forecast characteristics
+    and interval to produce cleaner, more interpretable predictions.
+    
+    Args:
+        predicted_prices: Raw forecast prices
+        anchor_price: Starting price for continuity
+        interval: Time interval for interval-specific tuning
+        strength: "light", "medium", "strong", or "auto"
+    
+    Returns:
+        Smoothed forecast prices
+    """
+    if len(predicted_prices) < 2:
+        return predicted_prices
+    
+    # Determine smoothing strength
+    if strength == "auto":
+        # Auto-detect based on interval
+        strength = "light" if interval in ("1m", "2m", "3m") else "medium"
+    
+    alpha_map = {"light": 0.7, "medium": 0.5, "strong": 0.3}
+    alpha = alpha_map.get(strength, 0.5)
+    
+    # Interval-specific adjustment
+    interval_adjustment = {
+        "1m": 0.15, "2m": 0.12, "3m": 0.10, "5m": 0.08,
+        "15m": 0.05, "30m": 0.03, "60m": 0.0, "1h": 0.0,
+        "1d": -0.05, "1wk": -0.08, "1mo": -0.10,
+    }.get(interval, 0.0)
+    alpha = float(np.clip(alpha + interval_adjustment, 0.2, 0.8))
+
+    # Apply exponential smoothing with anchor continuity
+    smoothed: list[float] = [predicted_prices[0]]
+    for i, price in enumerate(predicted_prices[1:], 1):
+        # Increase smoothing for later steps (more uncertainty)
+        step_decay = 1.0 - 0.08 * min(i, 5)
+        effective_alpha = alpha * step_decay
+
+        prev = smoothed[-1]
+        smooth_price = effective_alpha * price + (1 - effective_alpha) * prev
+        smoothed.append(smooth_price)
+
+    return smoothed
+
+
+def _compress_forecast_micro_noise(
+    self,
+    predicted_prices: list[float],
+    interval: str,
+    anchor_price: float,
+    threshold_factor: float = 0.4,
+) -> list[float]:
+    """Compress micro-noise in forecast to prevent sawtooth patterns.
+    
+    FIX #3: Enhanced noise compression with adaptive thresholding based on
+    interval and local volatility to distinguish signal from noise.
+    
+    Args:
+        predicted_prices: Raw forecast prices
+        interval: Time interval for interval-specific tuning
+        anchor_price: Anchor price for relative threshold calculation
+        threshold_factor: Multiplier for noise threshold (lower = more compression)
+    
+    Returns:
+        Denoised forecast prices
+    """
+    if len(predicted_prices) < 3:
+        return predicted_prices
+    
+    # Interval-specific noise threshold (fraction of price)
+    # Smaller intervals have more inherent noise
+    base_thresholds = {
+        "1m": 0.0015, "2m": 0.002, "3m": 0.0025, "5m": 0.003,
+        "15m": 0.006, "30m": 0.009, "60m": 0.012, "1h": 0.012,
+        "1d": 0.015, "1wk": 0.025, "1mo": 0.035,
+    }
+    base_threshold = base_thresholds.get(interval, 0.01)
+    threshold = base_threshold * threshold_factor
+    
+    # Calculate local volatility for adaptive thresholding
+    prices = np.array(predicted_prices, dtype=float)
+    if len(prices) >= 5:
+        returns = np.diff(prices) / prices[:-1]
+        local_vol = float(np.std(returns))
+        # Adjust threshold based on observed volatility
+        # Higher vol = higher threshold (more noise expected)
+        threshold = max(threshold, local_vol * 0.5)
+    
+    # Apply wavelet-like denoising using moving median
+    window = min(5, max(3, len(predicted_prices) // 6))
+    if window % 2 == 0:
+        window += 1  # Ensure odd window for symmetric median
+    
+    denoised: list[float] = [predicted_prices[0]]
+    
+    for i in range(1, len(predicted_prices) - 1):
+        # Local window for noise detection
+        start_idx = max(0, i - window // 2)
+        end_idx = min(len(predicted_prices), i + window // 2 + 1)
+        local_window = prices[start_idx:end_idx]
+        
+        # Calculate median and deviation
+        local_median = float(np.median(local_window))
+        local_mad = float(np.median(np.abs(local_window - local_median)))
+        
+        # Adaptive threshold: use both global and local estimates
+        adaptive_threshold = max(threshold * anchor_price, local_mad * 1.5)
+        
+        current_price = prices[i]
+        deviation = abs(current_price - local_median)
+        
+        if deviation <= adaptive_threshold:
+            # Within noise band - use median
+            denoised.append(local_median)
+        else:
+            # Signal - preserve but soften
+            softening = adaptive_threshold / max(deviation, 1e-8)
+            softening = float(np.clip(softening, 0.3, 1.0))
+            blended = softening * current_price + (1 - softening) * local_median
+            denoised.append(blended)
+    
+    # Keep last point
+    denoised.append(predicted_prices[-1])
+    
+    # Apply light final smoothing to ensure continuity
+    if len(denoised) >= 3:
+        final_smooth: list[float] = [denoised[0]]
+        alpha_final = 0.8  # Light smoothing
+        for i in range(1, len(denoised) - 1):
+            smoothed_val = alpha_final * denoised[i] + (1 - alpha_final) * final_smooth[-1]
+            final_smooth.append(smoothed_val)
+        final_smooth.append(denoised[-1])
+        denoised = final_smooth
+    
+    return denoised

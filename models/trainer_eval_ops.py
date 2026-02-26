@@ -13,7 +13,8 @@ log = get_logger(__name__)
 _EPS = 1e-8
 
 # Stop check interval for batch loops (check every N batches)
-_STOP_CHECK_INTERVAL = 10
+# FIX: Reduced from 10 to 3 for faster cancellation response (consistent with trainer_data_ops)
+_STOP_CHECK_INTERVAL = 3
 _TRAINING_INTERVAL_LOCK = "1m"
 # FIX 1M: Reduced from 10080 to 480 bars - free sources provide 1-2 days of 1m data
 _MIN_1M_LOOKBACK_BARS = 480

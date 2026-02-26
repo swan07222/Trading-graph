@@ -21,6 +21,10 @@ def _on_price_updated(self: Any, code: str, price: float) -> None:
     FIXED: No longer calls update_data() which was overwriting candles.
     Instead, updates the current bar's close price so the candle
     reflects the live price.
+
+    FIX #5: Optimized real-time tracking with adaptive throttling,
+    forecast staleness detection, and efficient incremental updates
+    to prevent frozen guessed graphs during sparse feed ticks.
     
     FIX: Added better throttling to reduce UI flicker in watchlist.
     """
@@ -34,6 +38,12 @@ def _on_price_updated(self: Any, code: str, price: float) -> None:
         return
     if not code or price <= 0:
         return
+
+    # FIX #5: Track last update time per symbol for staleness detection
+    now_ts = time.time()
+    last_update = self._last_bar_feed_ts.get(code, 0.0)
+    time_since_update = now_ts - last_update
+    self._last_bar_feed_ts[code] = now_ts
 
     row = self._watchlist_row_by_code.get(code)
     if row is None:
@@ -55,17 +65,28 @@ def _on_price_updated(self: Any, code: str, price: float) -> None:
         if prev_ui is not None:
             prev_ts, prev_px = float(prev_ui[0]), float(prev_ui[1])
             elapsed_ms = (now_ui - prev_ts) * 1000
+
+            # FIX #5: Adaptive throttling based on market volatility
+            # Higher volatility = more frequent updates allowed
+            volatility_factor = 1.0
+            arr = self._bars_by_symbol.get(code, [])
+            if arr and len(arr) >= 10:
+                closes = [b.get("close", 0.0) for b in arr[-20:] if b.get("close", 0) > 0]
+                if len(closes) >= 5:
+                    recent_vol = (max(closes) - min(closes)) / max(closes, 1e-8)
+                    volatility_factor = min(2.0, 1.0 + recent_vol * 10)
             
-            # FIX: Improved throttling - 200ms minimum between updates
-            # with 0.01% minimum change threshold to reduce flicker
-            if elapsed_ms < 200.0:
+            # Dynamic throttle: base 200ms, reduced by volatility
+            dynamic_throttle_ms = 200.0 / volatility_factor
+            min_change_pct = 0.0001 * volatility_factor
+            
+            if elapsed_ms < dynamic_throttle_ms:
                 pct_change = abs(price - prev_px) / max(prev_px, 0.0001)
-                if pct_change < 0.0001:  # 0.01% minimum change
+                if pct_change < min_change_pct:
                     refresh_price = False
             elif elapsed_ms < 500.0:
-                # Medium throttle window - require 0.05% change
                 pct_change = abs(price - prev_px) / max(prev_px, 0.0001)
-                if pct_change < 0.0005:
+                if pct_change < min_change_pct * 5:
                     refresh_price = False
 
         if refresh_price:
@@ -137,7 +158,24 @@ def _on_price_updated(self: Any, code: str, price: float) -> None:
         bool(arr)
         and feed_age <= max(2.0, float(interval_s) * 1.2)
     )
-    if has_recent_feed_bar:
+    
+    # FIX #5: Detect forecast staleness and force refresh for sparse ticks
+    # If no recent feed bar but we have cached prediction, force a refresh
+    # to keep the guessed graph moving with price updates
+    forecast_stale = False
+    if code == current_code and not has_recent_feed_bar:
+        forecast_age = now_ts - getattr(self, "_last_forecast_refresh_ts", 0.0)
+        # Consider forecast stale if older than 2x the bar interval
+        if forecast_age > max(10.0, interval_s * 2.0):
+            forecast_stale = True
+            self._debug_console(
+                f"forecast_stale_force_refresh:{code}:{interval}",
+                f"Forcing forecast refresh for {code}: forecast age={forecast_age:.1f}s interval={interval_s}s",
+                min_gap_seconds=3.0,
+                level="info",
+            )
+    
+    if has_recent_feed_bar or forecast_stale:
         if arr:
             try:
                 last = arr[-1]
@@ -573,59 +611,76 @@ def _on_price_updated(self: Any, code: str, price: float) -> None:
         )
 
     if not models_ready:
-        stale_cleared = False
-        try:
-            if (
-                self.current_prediction
-                and self.current_prediction.stock_code == code
-            ):
-                had_pred = bool(
-                    list(getattr(self.current_prediction, "predicted_prices", []) or [])
-                    or list(getattr(self.current_prediction, "predicted_prices_low", []) or [])
-                    or list(getattr(self.current_prediction, "predicted_prices_high", []) or [])
-                )
-                self.current_prediction.predicted_prices = []
-                self.current_prediction.predicted_prices_low = []
-                self.current_prediction.predicted_prices_high = []
-                stale_cleared = bool(had_pred)
-        except _APP_CHART_RECOVERABLE_EXCEPTIONS:
-            stale_cleared = False
-
-        if stale_cleared:
-            # [DBG] Model not ready - clearing stale prediction diagnostic
-            self._debug_console(
-                f"forecast_model_unavailable_clear:{code}",
-                f"Clearing stale prediction for {code}: model artifacts unavailable",
-                min_gap_seconds=1.0,
-                level="info",
-            )
-            arr = self._bars_by_symbol.get(code) or []
-            if arr:
-                try:
-                    self._render_chart_state(
-                        symbol=code,
-                        interval=self._normalize_interval_token(
-                            self.interval_combo.currentText()
-                        ),
-                        bars=arr,
-                        context="forecast_model_unavailable",
-                        current_price=price if price > 0 else None,
-                        predicted_prices=[],
-                        source_interval=self._normalize_interval_token(
-                            self.interval_combo.currentText()
-                        ),
-                        target_steps=int(self.forecast_spin.value()),
-                        predicted_prepared=True,
-                    )
-                except _APP_CHART_RECOVERABLE_EXCEPTIONS as exc:
-                    log.debug("Suppressed exception in app_chart_pipeline", exc_info=exc)
-
-        self._debug_console(
-            f"forecast_model_unavailable:{code}",
-            f"skipped guessed-curve refresh for {code}: model artifacts unavailable",
-            min_gap_seconds=3.0,
-            level="warning",
+        # FIX #4: Try cached or fallback prediction instead of just clearing
+        arr = self._bars_by_symbol.get(code) or []
+        ui_interval = self._normalize_interval_token(
+            self.interval_combo.currentText()
         )
+        ui_horizon = int(self.forecast_spin.value())
+        
+        fallback_used = False
+        if arr and len(arr) >= 10:
+            fallback_used = self._use_fallback_prediction(
+                symbol=code,
+                interval=ui_interval,
+                horizon=ui_horizon,
+                bars=arr,
+                current_price=price if price > 0 else (arr[-1].get("close", 0.0) if arr else 0.0),
+            )
+        
+        if not fallback_used:
+            # Clear stale prediction if no fallback available
+            stale_cleared = False
+            try:
+                if (
+                    self.current_prediction
+                    and self.current_prediction.stock_code == code
+                ):
+                    had_pred = bool(
+                        list(getattr(self.current_prediction, "predicted_prices", []) or [])
+                        or list(getattr(self.current_prediction, "predicted_prices_low", []) or [])
+                        or list(getattr(self.current_prediction, "predicted_prices_high", []) or [])
+                    )
+                    self.current_prediction.predicted_prices = []
+                    self.current_prediction.predicted_prices_low = []
+                    self.current_prediction.predicted_prices_high = []
+                    stale_cleared = bool(had_pred)
+            except _APP_CHART_RECOVERABLE_EXCEPTIONS:
+                stale_cleared = False
+
+            if stale_cleared:
+                self._debug_console(
+                    f"forecast_model_unavailable_clear:{code}",
+                    f"Clearing stale prediction for {code}: model artifacts unavailable",
+                    min_gap_seconds=1.0,
+                    level="info",
+                )
+                if arr:
+                    try:
+                        self._render_chart_state(
+                            symbol=code,
+                            interval=self._normalize_interval_token(
+                                self.interval_combo.currentText()
+                            ),
+                            bars=arr,
+                            context="forecast_model_unavailable",
+                            current_price=price if price > 0 else None,
+                            predicted_prices=[],
+                            source_interval=self._normalize_interval_token(
+                                self.interval_combo.currentText()
+                            ),
+                            target_steps=int(self.forecast_spin.value()),
+                            predicted_prepared=True,
+                        )
+                    except _APP_CHART_RECOVERABLE_EXCEPTIONS as exc:
+                        log.debug("Suppressed exception in app_chart_pipeline", exc_info=exc)
+
+            self._debug_console(
+                f"forecast_model_unavailable:{code}",
+                f"skipped guessed-curve refresh for {code}: model artifacts unavailable",
+                min_gap_seconds=3.0,
+                level="warning",
+            )
         return
 
     ui_interval = self._normalize_interval_token(
@@ -846,6 +901,23 @@ def _on_price_updated(self: Any, code: str, price: float) -> None:
                     low_band, high_band = [], []
                 self.current_prediction.predicted_prices_low = low_band
                 self.current_prediction.predicted_prices_high = high_band
+                
+                # FIX #4: Cache successful predictions for graceful degradation
+                if display_predicted and len(display_predicted) > 0:
+                    confidence = 0.5
+                    try:
+                        confidence = float(getattr(self.current_prediction, "confidence", 0.5))
+                    except _APP_CHART_RECOVERABLE_EXCEPTIONS:
+                        pass
+                    
+                    self._cache_prediction(
+                        symbol=code,
+                        interval=interval,
+                        horizon=len(display_predicted),
+                        predicted_prices=list(display_predicted),
+                        anchor_price=display_current if display_current > 0 else anchor_px,
+                        confidence=confidence,
+                    )
 
             arr = self._bars_by_symbol.get(code)
             if arr:
@@ -1053,6 +1125,201 @@ def _prepare_chart_bars_for_interval(
 
     return out
 
+
+def _get_cached_prediction(
+    self,
+    symbol: str,
+    interval: str,
+    horizon: int,
+    current_price: float,
+) -> dict[str, Any] | None:
+    """Get cached prediction if available and fresh.
+    
+    FIX #4: Graceful degradation with cached predictions when model
+    is unavailable, allowing guessed graph to continue displaying
+    recent predictions with appropriate staleness indication.
+    
+    Args:
+        symbol: Stock symbol
+        interval: Time interval
+        horizon: Forecast horizon
+        current_price: Current price for cache validation
+    
+    Returns:
+        Cached prediction dict or None if expired/unavailable
+    """
+    if not hasattr(self, "_prediction_cache"):
+        return None
+    
+    cache_key = f"{symbol}:{interval}:{horizon}"
+    cached = self._prediction_cache.get(cache_key)
+    
+    if not cached:
+        return None
+    
+    # Check TTL
+    cached_ts = cached.get("timestamp", 0.0)
+    age = time.time() - cached_ts
+    ttl = getattr(self, "_prediction_cache_ttl", 300)
+    
+    if age > ttl:
+        # Expired - remove from cache
+        self._prediction_cache.pop(cache_key, None)
+        return None
+    
+    # Check price deviation - invalidate if price moved too much
+    cached_price = cached.get("anchor_price", 0.0)
+    if cached_price > 0:
+        price_move = abs(current_price - cached_price) / cached_price
+        max_allowed_move = 0.05  # 5% move invalidates cache
+        if price_move > max_allowed_move:
+            return None
+    
+    return cached
+
+
+def _cache_prediction(
+    self,
+    symbol: str,
+    interval: str,
+    horizon: int,
+    predicted_prices: list[float],
+    anchor_price: float,
+    confidence: float = 0.5,
+) -> None:
+    """Cache prediction for graceful degradation.
+    
+    FIX #4: Store predictions with metadata for later reuse when
+    model becomes temporarily unavailable.
+    
+    Args:
+        symbol: Stock symbol
+        interval: Time interval
+        horizon: Forecast horizon
+        predicted_prices: Forecast prices to cache
+        anchor_price: Starting price
+        confidence: Prediction confidence score
+    """
+    if not hasattr(self, "_prediction_cache"):
+        return
+    
+    cache_key = f"{symbol}:{interval}:{horizon}"
+    
+    # Enforce max cache size with LRU eviction
+    cache = self._prediction_cache
+    if len(cache) >= getattr(self, "_prediction_cache_max_size", 50):
+        # Remove oldest entry
+        oldest_key = min(cache.keys(), key=lambda k: cache[k].get("timestamp", 0))
+        cache.pop(oldest_key, None)
+    
+    cache[cache_key] = {
+        "predicted_prices": predicted_prices,
+        "anchor_price": anchor_price,
+        "confidence": confidence,
+        "timestamp": time.time(),
+        "interval": interval,
+        "horizon": horizon,
+    }
+
+
+def _use_fallback_prediction(
+    self,
+    symbol: str,
+    interval: str,
+    horizon: int,
+    bars: list[dict[str, Any]],
+    current_price: float,
+) -> bool:
+    """Attempt to use cached or fallback prediction when model unavailable.
+    
+    FIX #4: Try cached prediction first, then enhanced fallback forecast
+    to maintain guessed graph visibility even without trained model.
+    
+    Returns:
+        True if fallback was successfully applied
+    """
+    # Try cached prediction first
+    cached = self._get_cached_prediction(symbol, interval, horizon, current_price)
+    if cached:
+        predicted = cached.get("predicted_prices", [])
+        anchor = cached.get("anchor_price", current_price)
+        confidence = cached.get("confidence", 0.5)
+        
+        if predicted and len(predicted) >= horizon // 2:
+            self._render_chart_state(
+                symbol=symbol,
+                interval=interval,
+                bars=bars,
+                context="forecast_cached",
+                current_price=current_price,
+                predicted_prices=predicted,
+                source_interval=interval,
+                target_steps=horizon,
+                predicted_prepared=True,
+            )
+            self._debug_console(
+                f"forecast_cached:{symbol}:{interval}",
+                f"Using cached prediction for {symbol} (age={time.time() - cached['timestamp']:.0f}s)",
+                min_gap_seconds=2.0,
+                level="info",
+            )
+            return True
+    
+    # Try enhanced fallback forecast
+    if bars and len(bars) >= 20:
+        closes = [b.get("close", 0.0) for b in bars[-50:]]
+        closes = [c for c in closes if c > 0]
+        
+        if len(closes) >= 10:
+            # Calculate ATR for volatility scaling
+            atr_pct = 0.02
+            if len(closes) >= 5:
+                recent_vol = (max(closes[-5:]) - min(closes[-5:])) / max(closes[-5:], 1e-8)
+                atr_pct = max(0.01, recent_vol)
+            
+            try:
+                from models.predictor_forecast_ops import _generate_fallback_forecast
+                fallback = _generate_fallback_forecast(
+                    actual_prices=closes,
+                    horizon=horizon,
+                    atr_pct=atr_pct,
+                    interval=interval,
+                    use_enhanced=True,
+                )
+                
+                if fallback and len(fallback) >= horizon // 2:
+                    # Cache the fallback for future use
+                    self._cache_prediction(
+                        symbol=symbol,
+                        interval=interval,
+                        horizon=horizon,
+                        predicted_prices=fallback,
+                        anchor_price=current_price,
+                        confidence=0.3,  # Lower confidence for fallback
+                    )
+                    
+                    self._render_chart_state(
+                        symbol=symbol,
+                        interval=interval,
+                        bars=bars,
+                        context="forecast_fallback",
+                        current_price=current_price,
+                        predicted_prices=fallback,
+                        source_interval=interval,
+                        target_steps=horizon,
+                        predicted_prepared=True,
+                    )
+                    self._debug_console(
+                        f"forecast_fallback:{symbol}:{interval}",
+                        f"Using enhanced fallback forecast for {symbol}",
+                        min_gap_seconds=3.0,
+                        level="info",
+                    )
+                    return True
+            except Exception as e:
+                log.debug("Fallback forecast failed for %s: %s", symbol, e)
+    
+    return False
 
 
 def _load_chart_history_bars(*args: Any, **kwargs: Any) -> Any:

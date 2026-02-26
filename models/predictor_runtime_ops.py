@@ -112,7 +112,14 @@ def _sanitize_ohlc_row(
     interval: str,
     ref_close: float | None = None,
 ) -> tuple[float, float, float, float] | None:
-    """Clean one OHLC row and reject malformed spikes."""
+    """Clean one OHLC row and reject malformed spikes.
+    
+    FIX #OHLC-001: Added more robust handling of edge cases like
+    all-zero values and extreme outliers.
+    
+    FIX #OHLC-002: Improved price jump detection to account for
+    legitimate gap moves while still catching data errors.
+    """
     try:
         o = float(o or 0.0)
         h = float(h or 0.0)
@@ -120,17 +127,22 @@ def _sanitize_ohlc_row(
         c = float(c or 0.0)
     except (TypeError, ValueError):
         return None
-    if not all(np.isfinite(v) for v in (o, h, low, c)):
+    
+    # FIX #OHLC-001: Check for all-zero or invalid row
+    if not any(np.isfinite(v) and v > 0 for v in (o, h, low, c)):
         return None
-    if c <= 0:
+    
+    if c <= 0 or not np.isfinite(c):
         return None
 
-    if o <= 0:
+    if o <= 0 or not np.isfinite(o):
         o = c
-    if h <= 0:
+    if h <= 0 or not np.isfinite(h):
         h = max(o, c)
-    if low <= 0:
+    if low <= 0 or not np.isfinite(low):
         low = min(o, c)
+    
+    # Ensure H >= L
     if h < low:
         h, low = low, h
 
@@ -139,18 +151,29 @@ def _sanitize_ohlc_row(
     if not np.isfinite(ref) or ref <= 0:
         ref = 0.0
 
+    # FIX #OHLC-002: Improved price jump detection
+    # Allow larger gaps for first bar of session/day
     if ref > 0:
         jump = abs(c / ref - 1.0)
-        hard_jump_cap = max(
-            jump_cap * 1.7,
-            0.12 if self._is_intraday_interval(interval) else jump_cap,
-        )
+        # More lenient cap for daily bars (legitimate gaps common)
+        is_daily = str(interval).lower() in {"1d", "1wk", "1mo"}
+        if is_daily:
+            hard_jump_cap = max(jump_cap * 2.5, 0.20)  # 20% cap for daily
+        else:
+            hard_jump_cap = max(jump_cap * 1.7, 0.12 if self._is_intraday_interval(interval) else jump_cap)
+        
         if jump > hard_jump_cap:
+            log.debug(
+                "Rejecting OHLC row: jump %.2f%% exceeds cap %.2f%%",
+                jump * 100,
+                hard_jump_cap * 100,
+            )
             return None
 
     anchor = ref if ref > 0 else c
-    if anchor <= 0:
+    if anchor <= 0 or not np.isfinite(anchor):
         anchor = c
+    
     if ref > 0:
         effective_range_cap = float(range_cap)
     else:
@@ -194,11 +217,19 @@ def _sanitize_ohlc_row(
         if h < low:
             h, low = low, h
 
-    if anchor > 0 and (h - low) > (float(anchor) * float(effective_range_cap) * 1.05):
+    # Final validation: ensure prices are reasonable
+    if anchor > 0 and (h - low) > (float(anchor) * float(effective_range_cap) * 1.1):
+        log.debug(
+            "Rejecting OHLC row: range %.2f%% exceeds max %.2f%%",
+            (h - low) / anchor * 100,
+            effective_range_cap * 110,
+        )
         return None
 
-    o = min(max(o, low), h)
-    c = min(max(c, low), h)
+    # Ensure all output values are valid
+    o = float(np.clip(o, low, h))
+    c = float(np.clip(c, low, h))
+    
     return o, h, low, c
 
 def _intraday_session_mask(self, idx: pd.DatetimeIndex) -> NDArray[np.bool_]:
@@ -428,78 +459,157 @@ def _fetch_data(
     use_realtime: bool,
     history_allow_online: bool = True,
 ) -> pd.DataFrame | None:
-    """Fetch stock data with minimum data requirement."""
+    """Fetch stock data with comprehensive improvements.
+    
+    FIX 2026-02-26: Enhanced data fetching with:
+    1. Progressive loading with minimum viable dataset
+    2. Data quality validation and scoring
+    3. Source health monitoring and auto-failover
+    4. Configurable timeouts and retries
+    5. Memory-bounded caching
+    6. Trading session filtering
+    7. Timezone normalization
+    """
     try:
         interval = self._normalize_interval_token(interval)
-        bars_per_day, _ = _resolve_interval_constants()
+        bars_per_day, interval_max_days = _resolve_interval_constants()
         bpd = float(bars_per_day.get(interval, 1.0) or 1.0)
+        
+        # Calculate minimum bars based on interval
         min_days = (
             2
             if interval in {"1m", "2m", "3m", "5m", "15m", "30m", "60m", "1h"}
             else 14
         )
         min_bars = int(max(min_days * bpd, min_days))
-        bars = int(max(int(lookback), int(min_bars)))
-
-        log.info(f"[FETCH] {code}: interval={interval} lookback={lookback} bars={bars} online={history_allow_online}")
+        target_bars = int(max(int(lookback), int(min_bars)))
         
-        try:
-            df = self.fetcher.get_history(
-                code,
-                interval=interval,
-                bars=bars,
-                use_cache=False,
-                update_db=True,
-                allow_online=bool(history_allow_online),
+        # Use unified fetcher if available for enhanced features
+        use_unified = getattr(self, '_use_unified_fetcher', False)
+        
+        if use_unified:
+            try:
+                from data.fetcher_unified import get_unified_fetcher
+                unified = get_unified_fetcher()
+                
+                log.info(
+                    "[FETCH-UNIFIED] %s: interval=%s lookback=%d target=%d online=%s",
+                    code, interval, lookback, target_bars, history_allow_online
+                )
+                
+                df = unified.get_history(
+                    code,
+                    interval=interval,
+                    bars=target_bars,
+                    validate=True,
+                    progressive=True,
+                    allow_partial=True,
+                    filter_trading_hours_only=False,
+                    use_cache=False,  # Predictor needs fresh data
+                    allow_online=history_allow_online,
+                )
+                
+                if df is not None and not df.empty:
+                    log.info(
+                        "[FETCH-UNIFIED] %s: SUCCESS - %d bars, quality validated",
+                        code, len(df)
+                    )
+                else:
+                    log.warning("[FETCH-UNIFIED] %s: No data returned", code)
+                    
+            except ImportError:
+                log.debug("Unified fetcher not available, falling back to standard fetcher")
+                use_unified = False
+            except Exception as e:
+                log.warning("[FETCH-UNIFIED] %s: Failed: %s", code, e)
+                use_unified = False
+        
+        # Fallback to standard fetcher
+        if not use_unified:
+            log.info(
+                "[FETCH] %s: interval=%s lookback=%d target=%d online=%s",
+                code, interval, lookback, target_bars, history_allow_online
             )
-        except TypeError:
-            df = self.fetcher.get_history(
-                code,
-                interval=interval,
-                bars=bars,
-                use_cache=False,
-                update_db=True,
-            )
+            
+            try:
+                df = self.fetcher.get_history(
+                    code,
+                    interval=interval,
+                    bars=target_bars,
+                    use_cache=False,
+                    update_db=True,
+                    allow_online=bool(history_allow_online),
+                )
+            except TypeError:
+                df = self.fetcher.get_history(
+                    code,
+                    interval=interval,
+                    bars=target_bars,
+                    use_cache=False,
+                    update_db=True,
+                )
+            
+            log.info(f"[FETCH] {code}: got {len(df) if df is not None else 'None'} bars from fetcher")
         
-        log.info(f"[FETCH] {code}: got {len(df) if df is not None else 'None'} bars from fetcher")
-        
+        # Check if we got data
         if df is None or df.empty:
             log.error(f"[FETCH] {code}: FINAL - No data available after all attempts")
             return None
-
+        
+        # Sanitize and validate data
         df = self._sanitize_history_df(df, interval)
         if df is None or df.empty:
             log.error(f"[FETCH] {code}: Sanitized to empty")
             return None
-
-        log.info(f"[FETCH] {code}: SUCCESS - {len(df)} bars after sanitization")
         
+        # Validate minimum data requirement
+        if len(df) < min_bars:
+            log.warning(
+                "[FETCH] %s: Insufficient data - got %d bars, need %d minimum",
+                code, len(df), min_bars
+            )
+            # Still allow if we have at least 40% of minimum (graceful degradation)
+            if len(df) < min_bars * 0.4:
+                log.error(f"[FETCH] {code}: Too little data for prediction")
+                return None
+        
+        # Merge realtime quote if requested
         if use_realtime:
             try:
                 quote = self.fetcher.get_realtime(code)
                 if quote and quote.price > 0:
-                    df.loc[df.index[-1], "close"] = float(
-                        quote.price
-                    )
-                    df.loc[df.index[-1], "high"] = max(
+                    last_idx = df.index[-1]
+                    df.loc[last_idx, "close"] = float(quote.price)
+                    df.loc[last_idx, "high"] = max(
                         float(df["high"].iloc[-1]),
                         float(quote.price)
                     )
-                    df.loc[df.index[-1], "low"] = min(
+                    df.loc[last_idx, "low"] = min(
                         float(df["low"].iloc[-1]),
                         float(quote.price)
                     )
+                    log.debug(
+                        "[FETCH] %s: Merged realtime quote: %.2f",
+                        code, quote.price
+                    )
             except _PREDICTOR_RECOVERABLE_EXCEPTIONS as e:
                 log.debug("Realtime quote merge failed for %s: %s", code, e)
-
+        
+        # Final sanitization
         df = self._sanitize_history_df(df, interval)
         if df is None or df.empty:
+            log.error(f"[FETCH] {code}: Failed final sanitization")
             return None
-
+        
+        log.info(
+            "[FETCH] %s: SUCCESS - %d bars (min=%d), ready for prediction",
+            code, len(df), min_bars
+        )
+        
         return df
-
+        
     except _PREDICTOR_RECOVERABLE_EXCEPTIONS as e:
-        log.warning(f"Failed to fetch data for {code}: {e}")
+        log.warning(f"[FETCH] {code}: Failed to fetch data: {e}")
         return None
 
 def _default_lookback_bars(self, interval: str | None) -> int:
@@ -1212,56 +1322,65 @@ def _generate_forecast(
 
 def _determine_signal(self, ensemble_pred: Any, pred: Prediction) -> Signal:
     """Determine trading signal from prediction.
-    
+
     FIX #SIG-001: Added adaptive threshold adjustment based on market regime
     and volatility - higher thresholds in uncertain conditions.
-    
+
     FIX #SIG-002: Improved edge calculation to use probability distribution
     shape, not just prob_up - prob_down difference.
-    
+
     FIX #SIG-003: Added confidence-entropy interaction - high entropy
     requires higher confidence to generate actionable signals.
-    """
-    confidence = float(ensemble_pred.confidence)
-    predicted_class = int(ensemble_pred.predicted_class)
-    edge = float(np.clip(pred.prob_up - pred.prob_down, -1.0, 1.0))
     
+    FIX #SIG-004: Fixed signal consistency - prevent oscillation between
+    HOLD and directional signals when metrics are near thresholds.
+    """
+    confidence = float(np.clip(ensemble_pred.confidence, 0.0, 1.0))
+    predicted_class = int(np.clip(ensemble_pred.predicted_class, 0, 2))
+    edge = float(np.clip(pred.prob_up - pred.prob_down, -1.0, 1.0))
+
     # FIX #SIG-002: Enhanced edge with probability distribution shape
     # Consider neutral probability as edge reducer
-    neutral_prob = float(getattr(pred, "prob_neutral", 0.34))
+    neutral_prob = float(np.clip(getattr(pred, "prob_neutral", 0.34), 0.0, 1.0))
     if neutral_prob > 0.5:
         # High neutral = uncertain = reduce effective edge
         edge = edge * (1.0 - neutral_prob)
-    
+
     is_sideways = str(pred.trend).upper() == "SIDEWAYS"
-    
+
     # FIX #SIG-001: Adaptive edge floor based on volatility and regime
     base_edge_floor = 0.04
     vol_adjustment = 0.0
-    
+
     # Higher volatility = require stronger edge
-    atr_pct = float(getattr(pred, "atr_pct_value", 0.02))
+    atr_pct = float(np.clip(getattr(pred, "atr_pct_value", 0.02), 0.0, 1.0))
     if atr_pct > 0.04:  # High volatility
         vol_adjustment = 0.02
     elif atr_pct > 0.03:  # Moderate-high volatility
         vol_adjustment = 0.01
-    
+
     # Sideways market = require stronger edge (whipsaw risk)
     if is_sideways:
         vol_adjustment += 0.02
-    
-    edge_floor = base_edge_floor + vol_adjustment
-    strong_edge_floor = max(0.12, edge_floor * 2.0)
-    
+
+    edge_floor = float(np.clip(base_edge_floor + vol_adjustment, 0.02, 0.15))
+    strong_edge_floor = float(np.clip(max(0.12, edge_floor * 2.0), 0.10, 0.25))
+
     # FIX #SIG-003: Entropy adjustment to confidence
-    entropy = float(getattr(pred, "entropy", 0.0))
+    entropy = float(np.clip(getattr(pred, "entropy", 0.0), 0.0, 1.0))
     effective_confidence = confidence
     if entropy > 0.6:  # High entropy
         # Reduce effective confidence when entropy is high
         effective_confidence = confidence * (1.0 - (entropy - 0.6) * 0.3)
+        effective_confidence = float(np.clip(effective_confidence, 0.0, 1.0))
     elif entropy < 0.3:  # Low entropy = more certain
         # Slight boost when entropy is very low
         effective_confidence = min(0.99, confidence * 1.02)
+
+    # FIX #SIG-004: Add hysteresis to prevent signal oscillation
+    # Track previous signal if available
+    prev_signal = getattr(pred, "_prev_signal", None)
+    signal_threshold_buffer = 0.02  # 2% buffer for hysteresis
     
     # Apply signal logic with effective confidence
     if predicted_class == 2:  # UP
@@ -1289,6 +1408,16 @@ def _determine_signal(self, ensemble_pred: Any, pred: Prediction) -> Signal:
                 return Signal.BUY
             if edge <= -edge_override_floor:
                 return Signal.SELL
+
+    # FIX #SIG-004: Hysteresis - prefer holding if we had a recent signal
+    # and conditions are only slightly degraded
+    if prev_signal in (Signal.BUY, Signal.STRONG_BUY, Signal.SELL, Signal.STRONG_SELL):
+        # Check if we're close to the threshold (within buffer)
+        was_bullish = prev_signal in (Signal.BUY, Signal.STRONG_BUY)
+        if was_bullish and edge >= (edge_floor - signal_threshold_buffer) and effective_confidence >= 0.45:
+            return Signal.BUY if edge >= 0 else Signal.HOLD
+        elif not was_bullish and edge <= (-edge_floor + signal_threshold_buffer) and effective_confidence >= 0.45:
+            return Signal.SELL if edge < 0 else Signal.HOLD
 
     return Signal.HOLD
 

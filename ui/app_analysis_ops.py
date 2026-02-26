@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import time
 from datetime import datetime
 from importlib import import_module
@@ -920,7 +921,16 @@ def _update_details(self, pred: Any) -> None:
     self.details_text.setHtml(html)
 
 def _add_to_history(self, pred: Any) -> None:
-    """Add prediction to history."""
+    """Add prediction to history.
+    
+    FIX: Validate entry_price before storing to prevent invalid guess calculations.
+    FIX: Store shares as None instead of 0 for clearer semantics.
+    FIX: Add null checks for table operations.
+    """
+    # Validate table exists
+    if not hasattr(self, "history_table") or self.history_table is None:
+        return
+    
     row = 0
     self.history_table.insertRow(row)
 
@@ -929,14 +939,17 @@ def _add_to_history(self, pred: Any) -> None:
         timestamp.strftime("%H:%M:%S")
         if hasattr(timestamp, 'strftime') else "--"
     ))
+    
+    stock_code = getattr(pred, 'stock_code', '--')
     self.history_table.setItem(
-        row, 1, QTableWidgetItem(getattr(pred, 'stock_code', '--'))
+        row, 1, QTableWidgetItem(stock_code if stock_code else '--')
     )
 
     signal = getattr(pred, 'signal', None)
     signal_text = (
         signal.value if hasattr(signal, 'value') else str(signal)
-    )
+    ) if signal is not None else "NONE"
+    
     signal_item = QTableWidgetItem(signal_text)
     signal_item.setForeground(QColor(ModernColors.ACCENT_INFO))
     self.history_table.setItem(row, 2, signal_item)
@@ -950,33 +963,70 @@ def _add_to_history(self, pred: Any) -> None:
     self.history_table.setItem(
         row, 4, QTableWidgetItem(f"{confidence:.0%}")
     )
-    entry_price = float(getattr(pred, "current_price", 0.0) or 0.0)
+    
+    # FIX: Validate entry_price before storing
+    entry_price_raw = getattr(pred, "current_price", 0.0)
+    try:
+        entry_price = float(entry_price_raw or 0.0)
+        if not math.isfinite(entry_price) or entry_price <= 0:
+            entry_price = 0.0
+    except (TypeError, ValueError):
+        entry_price = 0.0
+    
     result_item = QTableWidgetItem("--")
+    
+    # FIX: Ensure direction is properly computed with validated signal_text
+    direction = self._signal_to_direction(signal_text if signal_text else "NONE")
+    
+    # FIX: Store shares as None for clearer semantics (triggers notional calculation)
     result_item.setData(
         Qt.ItemDataRole.UserRole,
         {
-            "symbol": self._ui_norm(getattr(pred, "stock_code", "")),
+            "symbol": self._ui_norm(getattr(pred, "stock_code", "") or ""),
             "entry_price": entry_price,
-            "direction": self._signal_to_direction(signal_text),
+            "direction": direction,
             "mark_price": entry_price,
-            # 0 means auto-size by notional value in _compute_guess_profit.
-            "shares": 0,
+            "shares": None,  # None means auto-size by notional value
         },
     )
     self.history_table.setItem(row, 5, result_item)
 
-    while self.history_table.rowCount() > 100:
-        self.history_table.removeRow(
-            self.history_table.rowCount() - 1
-        )
+    # Clean up old rows with proper validation
+    try:
+        while self.history_table.rowCount() > 100:
+            self.history_table.removeRow(
+                self.history_table.rowCount() - 1
+            )
+    except (AttributeError, RuntimeError):
+        pass
 
 def _signal_to_direction(self, signal_text: str) -> str:
-    """Map prediction signal text to directional guess."""
-    text = str(signal_text or "").upper()
-    if "BUY" in text:
+    """Map prediction signal text to directional guess.
+    
+    FIX: Handle None and empty string explicitly.
+    FIX: Improve case-insensitive matching for various signal formats.
+    FIX: Add support for additional signal variations (e.g., 'Strong Buy', 'Sell').
+    """
+    # Handle None or empty input
+    if signal_text is None:
+        return "NONE"
+    
+    text = str(signal_text).strip()
+    if not text:
+        return "NONE"
+    
+    # Case-insensitive matching
+    text_upper = text.upper()
+    
+    # Check for BUY signals (includes "BUY", "STRONG_BUY", "STRONG BUY", etc.)
+    if "BUY" in text_upper:
         return "UP"
-    if "SELL" in text:
+    
+    # Check for SELL signals (includes "SELL", "STRONG_SELL", "STRONG SELL", etc.)
+    if "SELL" in text_upper:
         return "DOWN"
+    
+    # Default to NONE for HOLD or unknown signals
     return "NONE"
 
 # Performance and quality constants
@@ -1014,30 +1064,58 @@ def _compute_guess_profit(
 
     FIX: Realistic China A-share transaction cost modeling.
     FIX Bug #6: Handle edge cases for shares calculation and invalid prices.
+    FIX: Add validation for extreme prices and overflow protection.
     """
+    # Validate and convert inputs
     try:
         entry = float(entry_price or 0.0)
         mark = float(mark_price or 0.0)
     except (TypeError, ValueError):
         return 0.0
 
+    # Validate prices are positive and finite
     if entry <= 0 or mark <= 0:
+        return 0.0
+    if not (math.isfinite(entry) and math.isfinite(mark)):
+        return 0.0
+
+    # Validate price ratio to prevent overflow in shares calculation
+    # If entry is too small, shares would be astronomically large
+    _MIN_ENTRY_PRICE = 0.01  # Minimum valid entry price (CNY)
+    if entry < _MIN_ENTRY_PRICE:
         return 0.0
 
     # Calculate shares based on notional value if not provided.
     if shares is None or int(shares) <= 0:
         try:
             lot_size = int(getattr(CONFIG, "LOT_SIZE", 100) or 100)
+            lot_size = max(1, lot_size)  # Ensure lot_size >= 1
+            
             # Calculate shares to match notional value (10,000 CNY)
             raw_shares = _GUESS_PROFIT_NOTIONAL_VALUE / entry
+            
+            # Validate raw_shares is finite and reasonable
+            if not math.isfinite(raw_shares) or raw_shares <= 0:
+                return 0.0
+            
+            # Cap raw_shares to prevent integer overflow
+            _MAX_SHARES = 10_000_000  # Maximum 10 million shares
+            if raw_shares > _MAX_SHARES:
+                raw_shares = _MAX_SHARES
+            
             shares = int(raw_shares / lot_size) * lot_size  # Round to lot size
-            shares = max(lot_size, shares)  # Minimum 1 lot (100 shares)
-        except (TypeError, ValueError, ZeroDivisionError):
+            shares = max(lot_size, shares)  # Minimum 1 lot
+        except (TypeError, ValueError, ZeroDivisionError, OverflowError):
             return 0.0
 
+    # Validate and convert shares to quantity
     try:
-        qty = max(1, int(shares))
-    except (TypeError, ValueError):
+        qty = int(shares)
+        if qty <= 0 or qty > _MAX_SHARES:
+            return 0.0
+        if not math.isfinite(qty):
+            return 0.0
+    except (TypeError, ValueError, OverflowError):
         return 0.0
 
     # Calculate gross P&L
@@ -1051,6 +1129,12 @@ def _compute_guess_profit(
         notional_sell = entry * qty
         notional_buy = mark * qty
     else:  # NONE or invalid
+        return 0.0
+
+    # Validate notionals to prevent overflow in cost calculation
+    if not (math.isfinite(notional_buy) and math.isfinite(notional_sell)):
+        return 0.0
+    if notional_buy <= 0 or notional_sell <= 0:
         return 0.0
 
     # Calculate transaction costs (China A-share market)
@@ -1078,11 +1162,19 @@ def _compute_guess_profit(
 
         total_costs = commission + stamp_duty + transfer_fee + slippage
 
+        # Validate total_costs is finite
+        if not math.isfinite(total_costs):
+            return 0.0
+
         # Net P&L after costs
         net_pnl = gross_pnl - total_costs
 
+        # Final validation: return 0 if result is not finite
+        if not math.isfinite(net_pnl):
+            return 0.0
+
         return net_pnl
-    except (TypeError, ValueError, KeyError, ZeroDivisionError):
+    except (TypeError, ValueError, KeyError, ZeroDivisionError, OverflowError):
         return 0.0
 
 def _refresh_guess_rows_for_symbol(self, code: str, price: float) -> None:
@@ -1090,6 +1182,8 @@ def _refresh_guess_rows_for_symbol(self, code: str, price: float) -> None:
 
     FIX: Uses improved profit calculation with transaction costs.
     FIX Bug #5: Add proper error handling to prevent race conditions and UI crashes.
+    FIX: Add proper null checks and validate table state before batch updates.
+    FIX: Prevent division by zero in return percentage calculation.
     """
     try:
         symbol = self._ui_norm(code)
@@ -1097,29 +1191,58 @@ def _refresh_guess_rows_for_symbol(self, code: str, price: float) -> None:
         if not symbol or mark_price <= 0:
             return
 
-        # FIX: Batch update for performance
+        # Validate table exists and is valid before batch update
+        if not hasattr(self, "history_table") or self.history_table is None:
+            return
+        if not hasattr(self.history_table, "setUpdatesEnabled"):
+            return
+
+        # FIX: Batch update for performance with proper state validation
+        updates_enabled = self.history_table.updatesEnabled()
         self.history_table.setUpdatesEnabled(False)
         try:
-            for row in range(self.history_table.rowCount()):
+            row_count = self.history_table.rowCount()
+            for row in range(row_count):
                 try:
                     code_item = self.history_table.item(row, 1)
                     result_item = self.history_table.item(row, 5)
-                    if not code_item or not result_item:
+                    if code_item is None or result_item is None:
                         continue
-                    if self._ui_norm(code_item.text()) != symbol:
+                    
+                    code_text = code_item.text()
+                    if code_text is None:
+                        continue
+                    
+                    if self._ui_norm(code_text) != symbol:
                         continue
 
-                    meta = result_item.data(Qt.ItemDataRole.UserRole) or {}
-                    direction = str(meta.get("direction", "NONE"))
-                    entry = float(meta.get("entry_price", 0.0) or 0.0)
-                    shares = int(meta.get("shares", 0) or 0)  # Will use notional if 0
+                    # Safely get metadata with null checks
+                    meta = result_item.data(Qt.ItemDataRole.UserRole)
+                    if meta is None:
+                        continue
+                    if not isinstance(meta, dict):
+                        continue
+                    
+                    direction = str(meta.get("direction", "NONE") or "NONE")
+                    entry_raw = meta.get("entry_price", 0.0)
+                    entry = float(entry_raw or 0.0)
+                    shares_raw = meta.get("shares", 0)
+                    shares = int(shares_raw or 0)  # Will use notional if 0
+                    
                     pnl = self._compute_guess_profit(direction, entry, mark_price, shares)
-                    raw_ret_pct = ((mark_price / entry - 1.0) * 100.0) if entry > 0 else 0.0
-                    signed_ret_pct = (
-                        raw_ret_pct
-                        if direction == "UP"
-                        else (-raw_ret_pct if direction == "DOWN" else 0.0)
-                    )
+                    
+                    # FIX: Safe return percentage calculation with division by zero protection
+                    if entry > 0:
+                        raw_ret_pct = (mark_price / entry - 1.0) * 100.0
+                    else:
+                        raw_ret_pct = 0.0
+                    
+                    if direction == "UP":
+                        signed_ret_pct = raw_ret_pct
+                    elif direction == "DOWN":
+                        signed_ret_pct = -raw_ret_pct
+                    else:
+                        signed_ret_pct = 0.0
 
                     if direction == "NONE":
                         result_item.setText("--")
@@ -1140,11 +1263,15 @@ def _refresh_guess_rows_for_symbol(self, code: str, price: float) -> None:
 
                     meta["mark_price"] = mark_price
                     result_item.setData(Qt.ItemDataRole.UserRole, meta)
-                except (TypeError, ValueError, AttributeError):
-                    # Skip problematic rows
+                except (TypeError, ValueError, AttributeError, RuntimeError):
+                    # Skip problematic rows without crashing
                     continue
         finally:
-            self.history_table.setUpdatesEnabled(True)
+            # Always restore update state even if error occurs
+            try:
+                self.history_table.setUpdatesEnabled(updates_enabled)
+            except (AttributeError, RuntimeError):
+                pass
 
         self._update_correct_guess_profit_ui()
     except (TypeError, ValueError, AttributeError, RuntimeError) as e:
@@ -1154,7 +1281,23 @@ def _refresh_guess_rows_for_symbol(self, code: str, price: float) -> None:
 def _calculate_realtime_correct_guess_profit(self) -> dict[str, float]:
     """Aggregate real-time guess quality across history rows.
     Reports both net and gross-correct directional P&L.
+    
+    FIX: Add proper null checks and validate table state.
+    FIX: Ensure consistent shares handling with _compute_guess_profit.
+    FIX: Validate mark_price to prevent incorrect P&L calculations.
     """
+    # Validate table exists
+    if not hasattr(self, "history_table") or self.history_table is None:
+        return {
+            "total": 0.0,
+            "correct": 0.0,
+            "wrong": 0.0,
+            "correct_profit": 0.0,
+            "wrong_loss": 0.0,
+            "net_profit": 0.0,
+            "hit_rate": 0.0,
+        }
+    
     total = 0
     correct = 0
     wrong = 0
@@ -1162,34 +1305,56 @@ def _calculate_realtime_correct_guess_profit(self) -> dict[str, float]:
     wrong_loss = 0.0
     net_profit = 0.0
 
-    for row in range(self.history_table.rowCount()):
-        result_item = self.history_table.item(row, 5)
-        if not result_item:
-            continue
-        meta = result_item.data(Qt.ItemDataRole.UserRole) or {}
-        direction = str(meta.get("direction", "NONE"))
-        if direction not in ("UP", "DOWN"):
-            continue
-
-        entry = float(meta.get("entry_price", 0.0) or 0.0)
-        mark = float(meta.get("mark_price", 0.0) or 0.0)
-        shares_raw = meta.get("shares", None)
+    row_count = self.history_table.rowCount()
+    for row in range(row_count):
         try:
-            shares = int(shares_raw) if shares_raw is not None else None
-        except (TypeError, ValueError):
-            shares = None
-        if shares is not None and shares <= 0:
-            shares = None
-        pnl = self._compute_guess_profit(direction, entry, mark, shares)
+            result_item = self.history_table.item(row, 5)
+            if result_item is None:
+                continue
+            
+            meta = result_item.data(Qt.ItemDataRole.UserRole)
+            if meta is None or not isinstance(meta, dict):
+                continue
+            
+            direction = str(meta.get("direction", "NONE") or "NONE")
+            if direction not in ("UP", "DOWN"):
+                continue
 
-        total += 1
-        if pnl > 0:
-            correct += 1
-            correct_profit += pnl
-        elif pnl < 0:
-            wrong += 1
-            wrong_loss += abs(pnl)
-        net_profit += pnl
+            entry_raw = meta.get("entry_price", 0.0)
+            entry = float(entry_raw or 0.0)
+            
+            mark_raw = meta.get("mark_price", 0.0)
+            mark = float(mark_raw or 0.0)
+            
+            # FIX: Skip if mark_price is invalid (not yet updated)
+            if mark <= 0:
+                continue
+            
+            # FIX: Consistent shares handling - pass 0 to trigger notional calculation
+            shares_raw = meta.get("shares", 0)
+            if shares_raw is None or (isinstance(shares_raw, int) and shares_raw <= 0):
+                shares = None  # Let _compute_guess_profit calculate from notional
+            else:
+                try:
+                    shares = int(shares_raw)
+                    if shares <= 0:
+                        shares = None
+                except (TypeError, ValueError):
+                    shares = None
+            
+            pnl = self._compute_guess_profit(direction, entry, mark, shares)
+
+            total += 1
+            if pnl > 0:
+                correct += 1
+                correct_profit += pnl
+            elif pnl < 0:
+                wrong += 1
+                wrong_loss += abs(pnl)
+            net_profit += pnl
+        except (TypeError, ValueError, AttributeError, RuntimeError):
+            # Skip problematic rows
+            continue
 
     return {
         "total": float(total),

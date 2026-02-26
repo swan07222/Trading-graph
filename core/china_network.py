@@ -352,6 +352,24 @@ class ChinaNetworkOptimizer:
             available.sort(key=lambda x: x[1].quality_score, reverse=True)
             return available[0][0]
 
+    def is_provider_available(self, provider: str) -> bool:
+        """Check if a provider has at least one available endpoint.
+        
+        Args:
+            provider: Provider name (e.g., 'eastmoney', 'sina')
+            
+        Returns:
+            True if at least one endpoint is available
+        """
+        with self._quality_lock:
+            if provider not in self._endpoint_quality:
+                return False
+            
+            return any(
+                quality.is_available 
+                for quality in self._endpoint_quality[provider].values()
+            )
+
     def update_endpoint_quality(
         self,
         provider: str,
@@ -749,6 +767,109 @@ def china_optimized(provider: str):
 
         return wrapper
     return decorator
+
+
+def check_search_engine_health(
+    engine_name: str,
+    test_url: str,
+    timeout: int = 10,
+) -> tuple[bool, float]:
+    """Check health of a search engine endpoint.
+    
+    China-optimized: Tests search engine accessibility and response time.
+    
+    Args:
+        engine_name: Name of the search engine (e.g., 'baidu', 'bing_cn')
+        test_url: URL to test (usually the search engine homepage)
+        timeout: Request timeout in seconds
+        
+    Returns:
+        Tuple of (is_healthy, latency_ms)
+    """
+    start = time.time()
+    try:
+        session = requests.Session()
+        adapter = HTTPAdapter(
+            pool_connections=1,
+            pool_maxsize=1,
+            timeout=timeout,
+        )
+        session.mount('https://', adapter)
+        
+        response = session.get(test_url, timeout=timeout)
+        latency_ms = (time.time() - start) * 1000
+        
+        is_healthy = response.status_code == 200
+        session.close()
+        
+        log.debug(f"Search engine {engine_name} health check: {'OK' if is_healthy else 'FAILED'} ({latency_ms:.0f}ms)")
+        return is_healthy, latency_ms
+        
+    except Exception as e:
+        latency_ms = (time.time() - start) * 1000
+        log.warning(f"Search engine {engine_name} health check FAILED: {e}")
+        return False, latency_ms
+
+
+def get_network_health_report() -> dict[str, Any]:
+    """Get comprehensive network health report for China users.
+    
+    Returns:
+        Dictionary with health metrics for all monitored endpoints
+    """
+    optimizer = get_optimizer()
+    
+    # Test search engines
+    search_engines = {
+        "baidu": "https://www.baidu.com",
+        "bing_cn": "https://cn.bing.com",
+        "sogou": "https://www.sogou.com",
+    }
+    
+    health_report = {
+        "timestamp": datetime.now().isoformat(),
+        "search_engines": {},
+        "data_providers": {},
+        "dns_servers": [],
+        "proxy_enabled": is_proxy_enabled(),
+    }
+    
+    # Check search engines
+    for name, url in search_engines.items():
+        is_healthy, latency = check_search_engine_health(name, url)
+        health_report["search_engines"][name] = {
+            "healthy": is_healthy,
+            "latency_ms": latency,
+            "status": "OK" if is_healthy else "UNREACHABLE",
+        }
+    
+    # Get data provider status
+    for provider in CHINA_ENDPOINTS:
+        best_endpoint = optimizer.get_best_endpoint(provider)
+        health_report["data_providers"][provider] = {
+            "best_endpoint": best_endpoint,
+            "available": optimizer.is_provider_available(provider),
+        }
+    
+    # Test DNS servers
+    for dns_ip, dns_port in CHINA_DNS_SERVERS[:3]:  # Test top 3
+        try:
+            socket.setdefaulttimeout(2)
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.settimeout(2)
+            sock.sendto(b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00', (dns_ip, dns_port))
+            sock.close()
+            health_report["dns_servers"].append({
+                "ip": dns_ip,
+                "reachable": True,
+            })
+        except Exception:
+            health_report["dns_servers"].append({
+                "ip": dns_ip,
+                "reachable": False,
+            })
+    
+    return health_report
 
 
 def close_all_sessions() -> None:

@@ -49,5 +49,12 @@ pydantic-settings>=2.1.0,<3.0.0
 # Redis caching
 redis>=5.0.0,<6.0.0
 
+# Enhanced training dependencies (NEW)
+# Bayesian hyperparameter optimization
+optuna>=3.5.0,<4.0.0
+
+# Class imbalance handling
+imbalanced-learn>=0.11.0,<1.0.0
+
 # China-specific dependencies (optional but recommended)
 # akshare>=1.11.0  # Uncomment for China A-share data (works best in China direct mode)
