@@ -36,9 +36,13 @@ log = get_logger(__name__)
 
 def _force_china_direct_network_mode() -> None:
     os.environ["TRADING_CHINA_DIRECT"] = "1"
-    from core.network import invalidate_network_cache
+    try:
+        from core.network import invalidate_network_cache
 
-    invalidate_network_cache()
+        invalidate_network_cache()
+    except (AttributeError, ImportError, OSError, RuntimeError, TypeError, ValueError):
+        # Keep auto-train resilient even if network utility imports fail.
+        pass
 
 
 class LLMAutoTrainWorker(QThread):
@@ -68,10 +72,15 @@ class LLMAutoTrainWorker(QThread):
             analyzer = get_llm_analyzer()
             idle_seconds = max(0, int(self.config.get("idle_seconds", 3) or 3))
             train_every_cycle = bool(self.config.get("train_every_cycle", True))
-            only_new_mode = not train_every_cycle
-            min_cycle_samples = 1 if train_every_cycle else int(
-                self.config.get("min_new_articles", 24) or 24
+            # Keep collection incremental by default: each cycle prefers new data,
+            # while the analyzer can still blend historical corpus for training.
+            only_new_mode = bool(self.config.get("only_new", True))
+            min_cycle_samples = (
+                int(self.config.get("min_new_articles", 1) or 1)
+                if train_every_cycle
+                else int(self.config.get("min_new_articles", 24) or 24)
             )
+            min_cycle_samples = max(1, int(min_cycle_samples))
             # FIX: Get accumulation settings
             accumulate_data = bool(self.config.get("accumulate_training_data", True))
             boost_ratio = float(self.config.get("corpus_boost_ratio", 0.5) or 0.5)
@@ -425,6 +434,7 @@ class LLMTrainDialog(QDialog):
             "limit_per_query": int(self.limit_spin.value()),
             "max_samples": int(self.max_samples_spin.value()),
             "train_every_cycle": True,
+            "only_new": True,
             "min_new_articles": 1,
             # FIX: Add accumulation settings
             "accumulate_training_data": bool(self.accumulate_check.isChecked()),
@@ -497,6 +507,17 @@ class LLMTrainDialog(QDialog):
             self.status_label.setText("Stopped")
             self.progress_bar.setFormat("Stopped")
             self._log("LLM auto-training stopped.", "warning")
+            cycles = int(payload.get("cycles_completed", 0) or 0)
+            if cycles > 0:
+                self._log(
+                    (
+                        f"Stopped after {cycles} cycle(s): "
+                        f"total_collected={payload.get('total_collected_articles', 0)}, "
+                        f"total_new={payload.get('total_new_articles', 0)}, "
+                        f"total_trained={payload.get('total_trained_samples', 0)}"
+                    ),
+                    "info",
+                )
             self.session_finished.emit(payload)
             return
 
@@ -614,6 +635,15 @@ class LLMTrainDialog(QDialog):
             if self.worker is not None:
                 self.worker.stop()
                 self.worker.wait(5000)
+                if self.worker.isRunning():
+                    QMessageBox.warning(
+                        self,
+                        "Stopping",
+                        "LLM auto-training is still finalizing the current step.\n"
+                        "Please wait a bit and try closing again.",
+                    )
+                    event.ignore()
+                    return
             self._stop_elapsed_clock()
             event.accept()
         else:

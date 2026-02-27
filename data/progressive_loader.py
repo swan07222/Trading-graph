@@ -38,6 +38,19 @@ class LoadStatus(Enum):
     INSUFFICIENT = "insufficient"
     FAILED = "failed"
 
+    def is_usable(self, min_status: "LoadStatus" = None) -> bool:
+        """Check if this status meets a minimum threshold."""
+        if min_status is None:
+            min_status = LoadStatus.MINIMUM
+        status_order = {
+            LoadStatus.FAILED: 0,
+            LoadStatus.INSUFFICIENT: 1,
+            LoadStatus.MINIMUM: 2,
+            LoadStatus.PARTIAL: 3,
+            LoadStatus.COMPLETE: 4,
+        }
+        return status_order[self] >= status_order[min_status]
+
 
 @dataclass
 class LoadResult:
@@ -53,14 +66,7 @@ class LoadResult:
     
     def is_usable(self, min_status: LoadStatus = LoadStatus.MINIMUM) -> bool:
         """Check if loaded data meets minimum requirements."""
-        status_order = [
-            LoadStatus.FAILED,
-            LoadStatus.INSUFFICIENT,
-            LoadStatus.MINIMUM,
-            LoadStatus.PARTIAL,
-            LoadStatus.COMPLETE,
-        ]
-        return status_order.index(self.status) >= status_order.index(min_status)
+        return self.status.is_usable(min_status)
     
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for reporting."""
@@ -214,7 +220,7 @@ class ProgressiveDataLoader:
             else:
                 return LoadResult(
                     status=LoadStatus.INSUFFICIENT,
-                    data=None,
+                    data=min_result,
                     bars_loaded=len(min_result),
                     bars_requested=target_bars,
                     quality_score=quality,

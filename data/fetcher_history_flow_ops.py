@@ -86,7 +86,9 @@ def _validate_ohlcv_frame(
     frame: pd.DataFrame,
     require_positive_volume: bool = True,
     min_bars: int = 1,
-) -> tuple[bool, list[str]]:
+    *,
+    return_issues: bool = False,
+) -> bool | tuple[bool, list[str]]:
     """Validate OHLCV DataFrame has valid data for caching.
 
     FIX 2026-02-26: Enhanced validation with detailed error reporting.
@@ -98,18 +100,22 @@ def _validate_ohlcv_frame(
         min_bars: Minimum number of bars required
 
     Returns:
-        Tuple of (is_valid, list_of_issues)
+        Boolean validity by default. When `return_issues=True`, returns
+        `(is_valid, list_of_issues)`.
     """
     issues: list[str] = []
 
     if frame is None:
-        return False, ["DataFrame is None"]
+        result = (False, ["DataFrame is None"])
+        return result if return_issues else result[0]
 
     if not isinstance(frame, pd.DataFrame):
-        return False, [f"Expected DataFrame, got {type(frame).__name__}"]
+        result = (False, [f"Expected DataFrame, got {type(frame).__name__}"])
+        return result if return_issues else result[0]
 
     if frame.empty:
-        return False, ["DataFrame is empty"]
+        result = (False, ["DataFrame is empty"])
+        return result if return_issues else result[0]
 
     if len(frame) < min_bars:
         issues.append(f"Insufficient bars: {len(frame)} < {min_bars}")
@@ -117,7 +123,8 @@ def _validate_ohlcv_frame(
     required_cols = {"open", "high", "low", "close"}
     missing_cols = required_cols - set(frame.columns)
     if missing_cols:
-        return False, [f"Missing required columns: {missing_cols}"]
+        result = (False, [f"Missing required columns: {missing_cols}"])
+        return result if return_issues else result[0]
 
     # Check for NaN values in required columns
     for col in required_cols:
@@ -184,7 +191,8 @@ def _validate_ohlcv_frame(
         except (TypeError, KeyError, ValueError) as e:
             issues.append(f"Volume validation error: {e}")
 
-    return len(issues) == 0, issues
+    result = (len(issues) == 0, issues)
+    return result if return_issues else result[0]
 
 
 def _check_minimum_data_quality(
@@ -211,7 +219,7 @@ def _check_minimum_data_quality(
         return False, f"Insufficient bars: {len(df)} < {min_bars}"
 
     # Validate OHLCV structure
-    is_valid, issues = _validate_ohlcv_frame(df, min_bars=1)
+    is_valid, issues = _validate_ohlcv_frame(df, min_bars=1, return_issues=True)
     if not is_valid:
         return False, f"Validation failed: {'; '.join(issues)}"
 
@@ -1018,7 +1026,10 @@ def _synthesize_intraday_with_daily_fallback(
             return pd.DataFrame()
 
         if not synthesized.empty:
-            is_valid, issues = _validate_ohlcv_frame(synthesized)
+            is_valid, issues = _validate_ohlcv_frame(
+                synthesized,
+                return_issues=True,
+            )
             if is_valid:
                 return _cache_tail_with_fallback(
                     self,
@@ -1061,7 +1072,10 @@ def _refresh_intraday_cache_from_db(
 
         if not db_fresh.empty:
             # Validate before caching
-            is_valid, issues = _validate_ohlcv_frame(db_fresh)
+            is_valid, issues = _validate_ohlcv_frame(
+                db_fresh,
+                return_issues=True,
+            )
             if is_valid:
                 self._cache.set(cache_key, db_fresh)
                 log.debug(
@@ -1426,7 +1440,10 @@ def _get_history_cn_daily(
                 db_fresh_resampled = self._resample_daily_to_interval(db_fresh, iv)
                 if not db_fresh_resampled.empty:
                     # Validate before caching
-                    is_valid, issues = _validate_ohlcv_frame(db_fresh_resampled)
+                    is_valid, issues = _validate_ohlcv_frame(
+                        db_fresh_resampled,
+                        return_issues=True,
+                    )
                     if is_valid:
                         self._cache.set(cache_key, db_fresh_resampled)
                         log.debug(
@@ -1613,7 +1630,7 @@ def _synthesize_intraday_from_daily(
         return pd.DataFrame()
 
     # Validate before returning
-    is_valid, issues = _validate_ohlcv_frame(result)
+    is_valid, issues = _validate_ohlcv_frame(result, return_issues=True)
     if not is_valid:
         log.warning(
             "Synthesized intraday data failed validation for %s (%s): %s",

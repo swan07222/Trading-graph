@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urljoin
 
 import requests
 
@@ -411,60 +412,87 @@ class NewsCollector:
         limit: int,
     ) -> list[NewsArticle]:
         """Fetch from EastMoney."""
-        articles = []
-        url = "https://np-anotice-stock.eastmoney.com/api/security/notice"
-        
+        articles: list[NewsArticle] = []
+        url = "https://search-api-web.eastmoney.com/search/jsonp"
+        primary_error: Exception | None = None
+
         try:
             params = {
-                "pageIndex": 0,
-                "pageSize": limit,
+                "cb": "jQuery",
+                "keyword": " ".join(keywords or []),
+                "pageNumber": 1,
+                "pageSize": max(1, int(limit)),
             }
             resp = self._session.get(url, params=params, timeout=10)
             resp.raise_for_status()
             data = self._decode_json_payload(resp.text)
-            
-            if not data or not isinstance(data, dict):
-                return []
 
-            items = data.get("data", [])
-            if not isinstance(items, list):
-                return []
+            if isinstance(data, dict):
+                rows = data.get("result", {}).get("data")
+                if not isinstance(rows, list):
+                    rows = data.get("data", [])
+                items = list(rows) if isinstance(rows, list) else []
+            else:
+                items = []
 
             for item in items[:limit]:
-                title = self._clean_text(item.get("Title", ""))
-                content = self._clean_text(item.get("Content", ""))
+                title = self._clean_text(
+                    item.get("title", "")
+                    or item.get("Title", "")
+                    or item.get("newsTitle", "")
+                )
+                content = self._clean_text(
+                    item.get("content", "")
+                    or item.get("Content", "")
+                    or item.get("digest", "")
+                )
                 if not title:
                     continue
 
-                pub_time = item.get("ShowTime", "")
+                pub_time = (
+                    item.get("showTime", "")
+                    or item.get("ShowTime", "")
+                    or item.get("publishTime", "")
+                )
                 published_at = self._parse_datetime(pub_time) or datetime.now()
-                
+
                 if not self._is_recent_enough(published_at, start_time):
                     continue
 
                 article_id = self._generate_id(f"eastmoney_{title}_{pub_time}")
-                
+                article_url = (
+                    item.get("url", "")
+                    or item.get("Url", "")
+                    or item.get("articleUrl", "")
+                )
+
                 article = NewsArticle(
                     id=article_id,
                     title=title,
                     content=content or title,
                     summary=title[:200],
                     source="eastmoney",
-                    url=item.get("Url", ""),
+                    url=str(article_url or ""),
                     published_at=published_at,
                     collected_at=datetime.now(),
                     language="zh",
                     category="company",
                 )
                 articles.append(article)
+        except Exception as e:
+            primary_error = e
 
+        if not articles:
+            articles = self._fetch_eastmoney_html_fallback(keywords, start_time, limit)
+
+        if articles:
             self._update_source_health("eastmoney", success=True)
             return articles[:limit]
 
-        except requests.RequestException as e:
-            log.warning(f"EastMoney fetch failed: {e}")
-            self._update_source_health("eastmoney", success=False)
-            return []
+        if primary_error is not None:
+            log.warning(f"EastMoney fetch failed: {primary_error}")
+        self._update_source_health("eastmoney", success=False)
+        return []
 
     def _fetch_sina_finance(
         self,
@@ -535,9 +563,10 @@ class NewsCollector:
         limit: int,
     ) -> list[NewsArticle]:
         """Fetch from Caixin."""
-        articles = []
+        articles: list[NewsArticle] = []
         url = "https://api.caixin.com/api/content/list"
-        
+        primary_error: Exception | None = None
+
         try:
             params = {
                 "limit": limit,
@@ -546,13 +575,12 @@ class NewsCollector:
             resp = self._session.get(url, params=params, timeout=10)
             resp.raise_for_status()
             data = self._decode_json_payload(resp.text)
-            
-            if not data or not isinstance(data, dict):
-                return []
 
+            if not isinstance(data, dict):
+                data = {}
             items = data.get("data", [])
             if not isinstance(items, list):
-                return []
+                items = []
 
             for item in items[:limit]:
                 title = self._clean_text(item.get("title", ""))
@@ -581,14 +609,114 @@ class NewsCollector:
                     category="policy",
                 )
                 articles.append(article)
+        except Exception as e:
+            primary_error = e
 
+        if not articles:
+            articles = self._fetch_caixin_html_fallback(keywords, start_time, limit)
+
+        if articles:
             self._update_source_health("caixin", success=True)
             return articles[:limit]
 
-        except requests.RequestException as e:
-            log.warning(f"Caixin fetch failed: {e}")
-            self._update_source_health("caixin", success=False)
+        if primary_error is not None:
+            log.warning(f"Caixin fetch failed: {primary_error}")
+        self._update_source_health("caixin", success=False)
+        return []
+
+    def _fetch_eastmoney_html_fallback(
+        self,
+        keywords: list[str] | None,
+        start_time: datetime,
+        limit: int,
+    ) -> list[NewsArticle]:
+        """Fallback HTML title extraction for EastMoney."""
+        try:
+            url = "https://finance.eastmoney.com/"
+            resp = self._session.get(url, timeout=10)
+            resp.raise_for_status()
+            return self._extract_html_anchor_articles(
+                html_text=resp.text,
+                source="eastmoney",
+                base_url=url,
+                start_time=start_time,
+                limit=limit,
+                keywords=keywords,
+                category="market",
+            )
+        except Exception:
             return []
+
+    def _fetch_caixin_html_fallback(
+        self,
+        keywords: list[str] | None,
+        start_time: datetime,
+        limit: int,
+    ) -> list[NewsArticle]:
+        """Fallback HTML title extraction for Caixin."""
+        try:
+            url = "https://www.caixinglobal.com/"
+            resp = self._session.get(url, timeout=10)
+            resp.raise_for_status()
+            return self._extract_html_anchor_articles(
+                html_text=resp.text,
+                source="caixin",
+                base_url=url,
+                start_time=start_time,
+                limit=limit,
+                keywords=keywords,
+                category="policy",
+            )
+        except Exception:
+            return []
+
+    def _extract_html_anchor_articles(
+        self,
+        *,
+        html_text: str,
+        source: str,
+        base_url: str,
+        start_time: datetime,
+        limit: int,
+        keywords: list[str] | None,
+        category: str,
+    ) -> list[NewsArticle]:
+        """Extract lightweight article objects from anchor tags."""
+        rows: list[NewsArticle] = []
+        pattern = re.compile(
+            r"<a[^>]+href=[\"'](?P<href>[^\"']+)[\"'][^>]*>(?P<title>.*?)</a>",
+            re.IGNORECASE | re.DOTALL,
+        )
+        _ = keywords
+        for match in pattern.finditer(str(html_text or "")):
+            if len(rows) >= max(1, int(limit)):
+                break
+            href = str(match.group("href") or "").strip()
+            title = self._clean_text(match.group("title") or "")
+            if not href or not title:
+                continue
+
+            published_at = datetime.now()
+            if not self._is_recent_enough(published_at, start_time):
+                continue
+
+            article_url = urljoin(base_url, href)
+            article_id = self._generate_id(f"{source}_{title}_{article_url}")
+            rows.append(
+                NewsArticle(
+                    id=article_id,
+                    title=title,
+                    content=title,
+                    summary=title[:200],
+                    source=source,
+                    url=article_url,
+                    published_at=published_at,
+                    collected_at=datetime.now(),
+                    language="zh",
+                    category=category,
+                )
+            )
+        return rows
 
     def _generate_id(self, text: str) -> str:
         """Generate unique article ID."""

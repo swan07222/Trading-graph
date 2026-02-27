@@ -2371,6 +2371,11 @@ class LLM_sentimentAnalyzer:
         notes: list[str] = list(pre_notes)
         x_arr = np.asarray(x, dtype=float)
         y_arr = np.asarray(y, dtype=int)
+        class_distribution = {
+            "positive": int(np.sum(y_arr == 1)),
+            "negative": int(np.sum(y_arr == -1)),
+            "neutral": int(np.sum(y_arr == 0)),
+        }
 
         # Feature scaling
         scaler = None
@@ -2542,6 +2547,7 @@ class LLM_sentimentAnalyzer:
             "transformer_labels_used": bool(transformer_requested and transformer_ready),
             "transformer_labels_requested": transformer_requested,
             "transformer_ready": transformer_ready,
+            "class_distribution": class_distribution,
         }
         self._write_training_status(out)
         return out
@@ -3013,6 +3019,173 @@ class LLM_sentimentAnalyzer:
         _ = kwargs  # Ignore kwargs
         return []
 
+    def _collect_auto_train_compat_articles(
+        self,
+        *,
+        hours_back: int,
+        limit_per_query: int,
+        max_samples: int,
+        min_new_articles: int,
+        force_china_direct: bool,
+        only_new: bool,
+        related_keywords: list[str] | None,
+        max_related_codes: int,
+        stop_flag: Callable[[], bool] | None = None,
+    ) -> tuple[list[NewsArticle], dict[str, Any], dict[str, Any]]:
+        """Compatibility collector used by resilience/hardening tests."""
+        collector = get_collector()
+        date_token = datetime.now().strftime("%Y-%m-%d")
+        query_groups = list(self._build_auto_search_queries(date_token=date_token) or [])
+        if not query_groups:
+            query_groups = [["A-share", "policy"]]
+
+        collection_target = int(
+            max(
+                1,
+                min(
+                    int(max_samples),
+                    max(80, int(max(1, limit_per_query)) * 4),
+                ),
+            )
+        )
+        strict_batch_failures = 0
+        strict_batch_recoveries = 0
+        corpus_breakdown: dict[str, int] = {
+            "search_news": 0,
+            "general_text": 0,
+            "policy_news": 0,
+            "stock_specific": 0,
+            "instruction_conversation": 0,
+        }
+        related_stock_codes: list[str] = []
+
+        seen_ids: set[str] = set()
+        rows: list[NewsArticle] = []
+
+        def _stopped() -> bool:
+            if stop_flag is None:
+                return False
+            try:
+                return bool(stop_flag())
+            except Exception:
+                return False
+
+        def _article_id(article: NewsArticle) -> str:
+            aid = str(getattr(article, "id", "") or "").strip()
+            if aid:
+                return aid
+            return _stable_article_id(
+                getattr(article, "source", ""),
+                getattr(article, "title", ""),
+                getattr(article, "url", ""),
+            )
+
+        def _append_unique(batch: list[NewsArticle], bucket: str) -> int:
+            added = 0
+            for article in list(batch or []):
+                aid = _article_id(article)
+                if not aid:
+                    continue
+                if aid in seen_ids:
+                    continue
+                if only_new and aid in self._seen_articles:
+                    continue
+                seen_ids.add(aid)
+                rows.append(article)
+                added += 1
+            corpus_breakdown[bucket] = int(corpus_breakdown.get(bucket, 0)) + int(added)
+            return added
+
+        for query in query_groups:
+            if _stopped() or len(rows) >= collection_target:
+                break
+            batch_limit = max(1, min(int(limit_per_query), collection_target - len(rows)))
+            if force_china_direct:
+                try:
+                    batch = collector.collect_news(
+                        keywords=list(query),
+                        limit=batch_limit,
+                        hours_back=max(1, int(hours_back)),
+                        strict=False,
+                    )
+                except Exception:
+                    batch = []
+            else:
+                try:
+                    batch = collector.collect_news(
+                        keywords=list(query),
+                        limit=batch_limit,
+                        hours_back=max(1, int(hours_back)),
+                        strict=True,
+                    )
+                except Exception:
+                    strict_batch_failures += 1
+                    try:
+                        batch = collector.collect_news(
+                            keywords=list(query),
+                            limit=batch_limit,
+                            hours_back=max(1, int(hours_back)),
+                            strict=False,
+                        )
+                        if batch:
+                            strict_batch_recoveries += 1
+                    except Exception:
+                        batch = []
+
+            _append_unique(list(batch or []), "search_news")
+
+        try:
+            segments, related_stock_codes = self._collect_china_corpus_segments(
+                hours_back=hours_back,
+                limit_per_query=limit_per_query,
+                related_keywords=related_keywords,
+                max_related_codes=max_related_codes,
+            )
+        except Exception:
+            segments, related_stock_codes = ({}, [])
+
+        for bucket in (
+            "general_text",
+            "policy_news",
+            "stock_specific",
+            "instruction_conversation",
+        ):
+            _append_unique(list((segments or {}).get(bucket, []) or []), bucket)
+
+        if len(rows) < max(1, int(min_new_articles)):
+            cached = list(
+                self._load_recent_cached_articles_for_training(
+                    hours_back=hours_back,
+                    limit=max(int(min_new_articles), int(limit_per_query)),
+                    related_keywords=related_keywords,
+                )
+                or []
+            )
+            try:
+                cached, _ = self._filter_high_quality_articles(
+                    cached,
+                    hours_back=max(12, int(hours_back)),
+                    min_samples=max(1, int(min_new_articles)),
+                )
+            except Exception:
+                pass
+            _append_unique(cached, "cache_fallback")
+
+        rows = rows[: max(1, int(max_samples))]
+        stats = {
+            "collected": len(rows),
+            "queries_used": len(query_groups),
+            "collection_target": int(collection_target),
+        }
+        extras = {
+            "strict_batch_failures": int(strict_batch_failures),
+            "strict_batch_recoveries": int(strict_batch_recoveries),
+            "corpus_breakdown": corpus_breakdown,
+            "collection_target": int(collection_target),
+            "related_stock_codes": list(related_stock_codes or []),
+        }
+        return rows, stats, extras
+
     # ----------------------------------------------------------------
     # Auto train from internet (per-cycle collect + train with accumulation)
     # ----------------------------------------------------------------
@@ -3085,24 +3258,39 @@ class LLM_sentimentAnalyzer:
 
         # Track accumulation stats
         corpus_stats_before = self.get_corpus_stats() if accumulate_training_data else None
+        compat_extras: dict[str, Any] = {}
 
         # Step 1: Collect NEW corpus (separate pipeline)
-        _emit(1, "Collecting LLM corpus...", "collect")
-        new_articles, collection_stats = self.collect_llm_corpus(
-            hours_back=hours_back,
-            limit_per_query=limit_per_query,
-            max_articles=max_samples,
-            only_new=only_new,
-            min_new_articles=min_new_articles,
-            stop_flag=stop_flag,
-            progress_callback=(
-                lambda p: _emit(
-                    1 + int(p.get("percent", 0) * 0.75),
-                    p.get("message", ""),
-                    p.get("stage", ""),
-                )
-            ),
-        )
+        if auto_related_search:
+            _emit(1, "Collecting LLM corpus...", "collect")
+            new_articles, collection_stats = self.collect_llm_corpus(
+                hours_back=hours_back,
+                limit_per_query=limit_per_query,
+                max_articles=max_samples,
+                only_new=only_new,
+                min_new_articles=min_new_articles,
+                stop_flag=stop_flag,
+                progress_callback=(
+                    lambda p: _emit(
+                        1 + int(p.get("percent", 0) * 0.75),
+                        p.get("message", ""),
+                        p.get("stage", ""),
+                    )
+                ),
+            )
+        else:
+            _emit(1, "Collecting compatibility corpus...", "collect")
+            new_articles, collection_stats, compat_extras = self._collect_auto_train_compat_articles(
+                hours_back=hours_back,
+                limit_per_query=limit_per_query,
+                max_samples=max_samples,
+                min_new_articles=min_new_articles,
+                force_china_direct=force_china_direct,
+                only_new=only_new,
+                related_keywords=related_keywords,
+                max_related_codes=max_related_codes,
+                stop_flag=stop_flag,
+            )
 
         if _stopped():
             report = {
@@ -3110,6 +3298,7 @@ class LLM_sentimentAnalyzer:
                 "collected_articles": len(new_articles),
                 **collection_stats,
             }
+            report.update(compat_extras)
             self._write_training_status(report)
             return report
 
@@ -3143,6 +3332,7 @@ class LLM_sentimentAnalyzer:
                         ),
                         **collection_stats,
                     }
+                    report.update(compat_extras)
                     _emit(100, "Too few articles for training.", "complete")
                     self._write_training_status(report)
                     return report
@@ -3154,6 +3344,7 @@ class LLM_sentimentAnalyzer:
                     "notes": f"Only {len(new_articles)} articles (min={min_new_articles}).",
                     **collection_stats,
                 }
+                report.update(compat_extras)
                 _emit(100, "Too few articles for training.", "complete")
                 self._write_training_status(report)
                 return report
@@ -3227,6 +3418,7 @@ class LLM_sentimentAnalyzer:
         report["accumulation_enabled"] = bool(accumulate_training_data)
         report["corpus_boost_ratio"] = float(corpus_boost_ratio)
         report["corpus_save_stats"] = save_stats
+        report.update(compat_extras)
 
         # Add corpus statistics
         if accumulate_training_data:

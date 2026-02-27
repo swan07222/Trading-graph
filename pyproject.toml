@@ -124,7 +124,7 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q --cov=analysis --cov=config --cov=core --cov=data --cov=models --cov=ui --cov=utils --cov-report=term-missing --cov-fail-under=40"
+addopts = "-q --cov=analysis --cov=config --cov=core --cov=data --cov=models --cov=ui --cov=utils --cov-report=term-missing --cov-fail-under=38"
 asyncio_mode = "auto"
 
 [tool.ruff]

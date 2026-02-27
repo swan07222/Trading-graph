@@ -17,10 +17,14 @@ Data Sources:
 - CSRC filings
 """
 
+import os
+import threading
+import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import requests
 
@@ -28,6 +32,356 @@ from config.settings import CONFIG
 from utils.logger import get_logger
 
 log = get_logger(__name__)
+
+
+def _clamp01(value: float) -> float:
+    """Clamp a score into [0, 1]."""
+    return float(max(0.0, min(1.0, float(value))))
+
+
+def _normalize_symbol(symbol: object) -> str:
+    """Normalize stock code into 6-digit numeric symbol."""
+    digits = "".join(ch for ch in str(symbol or "") if ch.isdigit())
+    if not digits:
+        return ""
+    return digits[-6:].zfill(6)
+
+
+def _safe_float(value: object) -> float | None:
+    """Parse numeric values including percent and CN unit suffixes."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return float(value)
+    if isinstance(value, (int, float)):
+        parsed = float(value)
+        if parsed != parsed:
+            return None
+        return parsed
+
+    text = str(value).strip()
+    if not text:
+        return None
+    lowered = text.lower()
+    if lowered in {"--", "-", "none", "null", "nan", "n/a", "na"}:
+        return None
+
+    scale = 1.0
+    if text.endswith("%"):
+        text = text[:-1].strip()
+    if text.endswith("亿"):
+        scale = 1e8
+        text = text[:-1].strip()
+    elif text.endswith("万"):
+        scale = 1e4
+        text = text[:-1].strip()
+
+    text = text.replace(",", "")
+    try:
+        return float(text) * scale
+    except ValueError:
+        return None
+
+
+@dataclass(slots=True)
+class FundamentalSnapshot:
+    """Single-symbol fundamental quality snapshot used by screener overlay."""
+
+    symbol: str
+    source: str = "proxy"
+    as_of: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+    pe_ttm: float | None = None
+    pb_mrq: float | None = None
+    dividend_yield: float | None = None
+    roe_ttm: float | None = None
+    gross_margin: float | None = None
+    revenue_growth_yoy: float | None = None
+    earnings_growth_yoy: float | None = None
+
+    avg_notional_20d_cny: float | None = None
+    annualized_volatility: float | None = None
+    trend_60d: float | None = None
+
+    value_score: float = 0.5
+    quality_score: float = 0.5
+    growth_score: float = 0.5
+    composite_score: float = 0.5
+
+    stale: bool = False
+    warnings: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "symbol": self.symbol,
+            "source": self.source,
+            "as_of": self.as_of.isoformat(),
+            "pe_ttm": self.pe_ttm,
+            "pb_mrq": self.pb_mrq,
+            "dividend_yield": self.dividend_yield,
+            "roe_ttm": self.roe_ttm,
+            "gross_margin": self.gross_margin,
+            "revenue_growth_yoy": self.revenue_growth_yoy,
+            "earnings_growth_yoy": self.earnings_growth_yoy,
+            "avg_notional_20d_cny": self.avg_notional_20d_cny,
+            "annualized_volatility": self.annualized_volatility,
+            "trend_60d": self.trend_60d,
+            "value_score": self.value_score,
+            "quality_score": self.quality_score,
+            "growth_score": self.growth_score,
+            "composite_score": self.composite_score,
+            "stale": self.stale,
+            "warnings": list(self.warnings),
+        }
+
+
+class FundamentalDataService:
+    """Fundamental snapshot service with safe proxy fallback and TTL cache."""
+
+    def __init__(self, cache_ttl_seconds: float = 600.0, stale_after_days: float = 7.0) -> None:
+        self._cache_ttl_seconds = max(5.0, float(cache_ttl_seconds))
+        self._stale_after_days = max(1.0, float(stale_after_days))
+        self._cache: dict[str, tuple[float, FundamentalSnapshot]] = {}
+        self._lock = threading.RLock()
+
+    def get_snapshot(self, symbol: object, *, force_refresh: bool = False) -> FundamentalSnapshot:
+        """Return a cached or refreshed snapshot for one symbol."""
+        code = _normalize_symbol(symbol)
+        if not code:
+            snap = FundamentalSnapshot(symbol="", source="invalid")
+            snap.warnings.append("invalid symbol")
+            self._recompute_scores(snap)
+            return snap
+
+        now = time.monotonic()
+        with self._lock:
+            cached = self._cache.get(code)
+            if (not force_refresh) and cached is not None:
+                expires_at, snapshot = cached
+                if now < expires_at:
+                    return snapshot
+
+        snapshot = self._fetch_snapshot(code)
+        self._recompute_scores(snapshot)
+
+        with self._lock:
+            self._cache[code] = (now + self._cache_ttl_seconds, snapshot)
+        return snapshot
+
+    def get_snapshots(
+        self,
+        symbols: list[object],
+        *,
+        force_refresh: bool = False,
+    ) -> dict[str, FundamentalSnapshot]:
+        """Return a normalized symbol -> snapshot map."""
+        out: dict[str, FundamentalSnapshot] = {}
+        for symbol in symbols:
+            code = _normalize_symbol(symbol)
+            if not code:
+                continue
+            out[code] = self.get_snapshot(code, force_refresh=force_refresh)
+        return out
+
+    def _fetch_snapshot(self, symbol: str) -> FundamentalSnapshot:
+        """Fetch snapshot using local history proxy when online mode is disabled."""
+        allow_online = str(os.environ.get("TRADING_FUNDAMENTALS_ONLINE", "0")).strip().lower()
+        allow_online_flag = allow_online in {"1", "true", "yes", "on"}
+        del allow_online_flag  # currently no online provider wired in
+
+        try:
+            from data import fetcher as fetcher_mod
+
+            fetcher = fetcher_mod.get_fetcher()
+            history = fetcher.get_history(
+                symbol,
+                interval="1d",
+                bars=180,
+                use_cache=True,
+                update_db=False,
+                allow_online=False,
+            )
+        except Exception as exc:
+            snap = FundamentalSnapshot(symbol=symbol, source="proxy")
+            snap.warnings.append(f"proxy fallback failed: {exc}")
+            return snap
+
+        return self._snapshot_from_history(symbol, history)
+
+    def _snapshot_from_history(self, symbol: str, history: object) -> FundamentalSnapshot:
+        """Build proxy fundamentals from OHLCV history."""
+        if not isinstance(history, pd.DataFrame) or history.empty:
+            snap = FundamentalSnapshot(symbol=symbol, source="proxy")
+            snap.warnings.append("missing history for proxy fundamentals")
+            return snap
+
+        frame = history.copy()
+        close = pd.to_numeric(frame.get("close"), errors="coerce")
+        volume = pd.to_numeric(frame.get("volume"), errors="coerce")
+        if close is None:
+            close = pd.Series(dtype=float)
+        if volume is None:
+            volume = pd.Series(dtype=float)
+
+        close = close.dropna()
+        volume = volume.reindex(close.index).fillna(0.0).astype(float)
+        if close.empty:
+            snap = FundamentalSnapshot(symbol=symbol, source="proxy")
+            snap.warnings.append("missing close series for proxy fundamentals")
+            return snap
+
+        returns = close.pct_change().replace([np.inf, -np.inf], np.nan).dropna()
+        ann_vol: float | None = None
+        if not returns.empty:
+            ann_vol = float(returns.std(ddof=0) * np.sqrt(252.0))
+
+        lookback_60 = close.tail(min(60, len(close)))
+        trend_60d: float | None = None
+        if len(lookback_60) >= 2:
+            start_px = float(lookback_60.iloc[0])
+            if start_px > 0:
+                trend_60d = float((float(lookback_60.iloc[-1]) / start_px) - 1.0)
+
+        notional = close * volume
+        notional_20d: float | None = None
+        if notional.notna().any():
+            recent = notional.tail(min(20, len(notional))).dropna()
+            if not recent.empty:
+                notional_20d = float(recent.mean())
+
+        median_px = float(close.tail(min(30, len(close))).median())
+        trend_proxy = 0.0 if trend_60d is None else float(trend_60d)
+        vol_proxy = 0.0 if ann_vol is None else float(ann_vol)
+
+        pe_proxy = float(np.clip(22.0 - (trend_proxy * 12.0) + (vol_proxy * 2.0), 8.0, 40.0))
+        pb_proxy = float(np.clip(2.6 - (trend_proxy * 0.8) + (vol_proxy * 0.2), 0.6, 8.0))
+        roe_proxy = float(np.clip(6.0 + (trend_proxy * 60.0) - (vol_proxy * 10.0), -5.0, 35.0))
+        gross_margin_proxy = float(np.clip(28.0 + (trend_proxy * 45.0), 5.0, 70.0))
+        revenue_growth_proxy = float(np.clip((trend_proxy * 120.0), -45.0, 80.0))
+        earnings_growth_proxy = float(np.clip((trend_proxy * 150.0), -50.0, 95.0))
+        dividend_yield_proxy = float(np.clip(1.8 + (max(0.0, 15.0 - pe_proxy) * 0.06), 0.2, 6.0))
+
+        as_of = datetime.now(UTC)
+        if isinstance(close.index, pd.DatetimeIndex) and len(close.index) > 0:
+            ts = close.index[-1]
+            if isinstance(ts, pd.Timestamp):
+                if ts.tzinfo is None:
+                    ts = ts.tz_localize("UTC")
+                as_of = ts.to_pydatetime().astimezone(UTC)
+
+        return FundamentalSnapshot(
+            symbol=symbol,
+            source="proxy",
+            as_of=as_of,
+            pe_ttm=pe_proxy,
+            pb_mrq=pb_proxy,
+            dividend_yield=dividend_yield_proxy,
+            roe_ttm=roe_proxy,
+            gross_margin=gross_margin_proxy,
+            revenue_growth_yoy=revenue_growth_proxy,
+            earnings_growth_yoy=earnings_growth_proxy,
+            avg_notional_20d_cny=notional_20d,
+            annualized_volatility=ann_vol,
+            trend_60d=trend_60d,
+        )
+
+    def _recompute_scores(self, snap: FundamentalSnapshot) -> None:
+        """Compute bounded composite scores with staleness/sparsity penalties."""
+        warnings = list(snap.warnings)
+        if snap.as_of.tzinfo is None:
+            as_of = snap.as_of.replace(tzinfo=UTC)
+        else:
+            as_of = snap.as_of.astimezone(UTC)
+        age_days = max(0.0, (datetime.now(UTC) - as_of).total_seconds() / 86400.0)
+        snap.stale = age_days > self._stale_after_days
+
+        value_components: list[float] = []
+        if snap.pe_ttm is not None and snap.pe_ttm > 0:
+            value_components.append(_clamp01((25.0 - float(snap.pe_ttm)) / 20.0))
+        if snap.pb_mrq is not None and snap.pb_mrq > 0:
+            value_components.append(_clamp01((3.0 - float(snap.pb_mrq)) / 2.5))
+        if snap.dividend_yield is not None and snap.dividend_yield >= 0:
+            value_components.append(_clamp01(float(snap.dividend_yield) / 5.0))
+        snap.value_score = (
+            float(np.mean(value_components)) if value_components else 0.25
+        )
+
+        quality_components: list[float] = []
+        if snap.roe_ttm is not None:
+            quality_components.append(_clamp01((float(snap.roe_ttm) + 5.0) / 25.0))
+        if snap.gross_margin is not None:
+            quality_components.append(_clamp01(float(snap.gross_margin) / 50.0))
+        if snap.annualized_volatility is not None:
+            quality_components.append(_clamp01(1.0 - (float(snap.annualized_volatility) / 1.5)))
+        snap.quality_score = (
+            float(np.mean(quality_components)) if quality_components else 0.25
+        )
+
+        growth_components: list[float] = []
+        if snap.revenue_growth_yoy is not None:
+            growth_components.append(_clamp01((float(snap.revenue_growth_yoy) + 20.0) / 60.0))
+        if snap.earnings_growth_yoy is not None:
+            growth_components.append(_clamp01((float(snap.earnings_growth_yoy) + 20.0) / 70.0))
+        if snap.trend_60d is not None:
+            growth_components.append(_clamp01((float(snap.trend_60d) + 0.20) / 0.60))
+        snap.growth_score = (
+            float(np.mean(growth_components)) if growth_components else 0.25
+        )
+
+        base = (
+            (0.34 * _clamp01(snap.value_score))
+            + (0.36 * _clamp01(snap.quality_score))
+            + (0.30 * _clamp01(snap.growth_score))
+        )
+
+        total_fields = 7
+        populated_fields = sum(
+            1
+            for val in (
+                snap.pe_ttm,
+                snap.pb_mrq,
+                snap.dividend_yield,
+                snap.roe_ttm,
+                snap.gross_margin,
+                snap.revenue_growth_yoy,
+                snap.earnings_growth_yoy,
+            )
+            if val is not None
+        )
+        coverage = populated_fields / float(total_fields)
+        sparse_penalty = _clamp01((0.60 - coverage) / 0.60) * 0.45
+
+        penalty = sparse_penalty
+        if snap.stale:
+            penalty += min(0.25, 0.03 * max(0.0, age_days - self._stale_after_days))
+            warnings.append("snapshot stale; composite score penalized")
+
+        if sparse_penalty > 0:
+            warnings.append(
+                "composite score quality-adjusted for sparse fundamental coverage"
+            )
+
+        if snap.source == "proxy":
+            penalty += 0.05
+            warnings.append("proxy-derived fundamentals in use")
+
+        snap.composite_score = _clamp01(base * (1.0 - _clamp01(penalty)))
+        snap.warnings = list(dict.fromkeys(str(msg) for msg in warnings if str(msg).strip()))
+
+
+_FUNDAMENTAL_SERVICE_LOCK = threading.Lock()
+_FUNDAMENTAL_SERVICE: FundamentalDataService | None = None
+
+
+def get_fundamental_service() -> FundamentalDataService:
+    """Return process-wide singleton fundamental service."""
+    global _FUNDAMENTAL_SERVICE
+    if _FUNDAMENTAL_SERVICE is not None:
+        return _FUNDAMENTAL_SERVICE
+    with _FUNDAMENTAL_SERVICE_LOCK:
+        if _FUNDAMENTAL_SERVICE is None:
+            _FUNDAMENTAL_SERVICE = FundamentalDataService()
+    return _FUNDAMENTAL_SERVICE
 
 
 @dataclass

@@ -446,7 +446,14 @@ class DataFetcher:
         elif net_sig != self._last_network_mode:
             self._last_network_mode = net_sig
             for s in self._all_sources:
-                with s._lock:
+                src_lock = getattr(s, "_lock", None)
+                if src_lock is not None:
+                    with src_lock:
+                        if hasattr(s, "status"):
+                            s.status.consecutive_errors = 0
+                            s.status.disabled_until = None
+                            s.status.available = True
+                elif hasattr(s, "status"):
                     s.status.consecutive_errors = 0
                     s.status.disabled_until = None
                     s.status.available = True

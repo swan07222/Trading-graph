@@ -8,8 +8,9 @@ Fixes:
 
 from __future__ import annotations
 
-import re
 import hashlib
+import json
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum, auto
@@ -143,9 +144,9 @@ class PromptGuard:
     
     # Sensitive topics that require extra scrutiny
     SENSITIVE_TOPICS = [
-        "password", "credential", "api\s*key", "token", "secret",
-        "private\s*key", "encryption\s*key", "database\s*password",
-        "admin\s*panel", "backdoor", "exploit", "vulnerability",
+        "password", "credential", r"api\s*key", "token", "secret",
+        r"private\s*key", r"encryption\s*key", r"database\s*password",
+        r"admin\s*panel", "backdoor", "exploit", "vulnerability",
     ]
     
     def __init__(
@@ -254,9 +255,7 @@ class PromptGuard:
         """Check for known attack patterns."""
         threats = []
         import uuid
-        
-        text_lower = text.lower()
-        
+
         # Check if text matches safe patterns (early exit)
         for pattern in self._safe_patterns:
             if pattern.search(text):
@@ -265,7 +264,7 @@ class PromptGuard:
         
         # Check injection patterns
         matched = []
-        for i, pattern in enumerate(self._injection_patterns):
+        for pattern in self._injection_patterns:
             if pattern.search(text):
                 matched.append(pattern.pattern[:50])
         
@@ -374,7 +373,7 @@ class PromptGuard:
                         threat_id=f"threat_{uuid.uuid4().hex[:8]}",
                         threat_type=ThreatType.AUTHORIZATION_BYPASS,
                         severity=9,
-                        description=f"Authorization bypass attempt in trading command",
+                        description="Authorization bypass attempt in trading command",
                         original_input=text[:500],
                         matched_patterns=[phrase],
                         confidence=0.9,
@@ -503,9 +502,6 @@ class PromptGuard:
 
 
 # JSON helper for logging
-import json
-
-
 # Singleton instance
 _guard_instance: PromptGuard | None = None
 

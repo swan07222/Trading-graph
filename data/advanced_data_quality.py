@@ -135,6 +135,12 @@ class DataQualityValidator:
             timeliness_score * weights["timeliness"] +
             distribution_score * weights["distribution"]
         )
+
+        # Hard caps when structural issues exist to avoid false "good" scores.
+        if QualityFlag.MISSING in flags:
+            overall_score = min(float(overall_score), 0.45)
+        if QualityFlag.INVALID in flags:
+            overall_score = min(float(overall_score), 0.35)
         
         # Generate recommendations
         recommendations = self._generate_recommendations(flags, issues, metrics)
@@ -181,9 +187,9 @@ class DataQualityValidator:
         flags: list[QualityFlag],
     ) -> float:
         """Check data accuracy using statistical tests."""
-        if len(df) < 10:
-            return 1.0  # Not enough data for statistical tests
-        
+        if len(df) <= 0:
+            return 0.0
+
         accuracy_scores = []
         
         # 1. Check for impossible values (negative prices, etc.)
@@ -213,17 +219,22 @@ class DataQualityValidator:
                 accuracy_scores.append(1.0)
         
         # 3. Detect outliers using Z-score
-        if "close" in df.columns:
-            z_scores = np.abs(stats.zscore(df["close"].dropna()))
-            outliers = (z_scores > self.z_threshold).sum()
-            if outliers > 0:
-                outlier_pct = outliers / len(df)
-                if outlier_pct > 0.05:
-                    issues.append(f"High outlier rate: {outlier_pct:.2%}")
-                    flags.append(QualityFlag.OUTLIER)
-                accuracy_scores.append(max(0.0, 1.0 - outlier_pct))
-            else:
-                accuracy_scores.append(1.0)
+        if "close" in df.columns and len(df) >= 10:
+            close_series = df["close"].dropna()
+            if len(close_series) >= 3:
+                z_scores = np.abs(stats.zscore(close_series))
+                outliers = int((z_scores > self.z_threshold).sum())
+                if outliers > 0:
+                    outlier_pct = outliers / len(df)
+                    if QualityFlag.OUTLIER not in flags:
+                        flags.append(QualityFlag.OUTLIER)
+                    if outlier_pct > 0.05:
+                        issues.append(f"High outlier rate: {outlier_pct:.2%}")
+                    else:
+                        issues.append(f"Outliers detected: {outliers}")
+                    accuracy_scores.append(max(0.0, 1.0 - outlier_pct))
+                else:
+                    accuracy_scores.append(1.0)
         
         # 4. Detect outliers using IQR
         if "close" in df.columns and len(df) > 4:
@@ -236,7 +247,7 @@ class DataQualityValidator:
             if iqr_outliers > 0:
                 accuracy_scores.append(max(0.0, 1.0 - iqr_outliers / len(df)))
         
-        return np.mean(accuracy_scores) if accuracy_scores else 1.0
+        return float(np.mean(accuracy_scores)) if accuracy_scores else 1.0
     
     def _check_consistency(
         self,
@@ -419,8 +430,8 @@ class DataQualityValidator:
         
         # 2. Handle missing values
         numeric_cols = repaired.select_dtypes(include=[np.number]).columns
-        repaired[numeric_cols] = repaired[numeric_cols].fillna(method="ffill")
-        repaired[numeric_cols] = repaired[numeric_cols].fillna(method="bfill")
+        repaired[numeric_cols] = repaired[numeric_cols].ffill()
+        repaired[numeric_cols] = repaired[numeric_cols].bfill()
         
         # 3. Cap extreme outliers
         for col in ["open", "high", "low", "close"]:

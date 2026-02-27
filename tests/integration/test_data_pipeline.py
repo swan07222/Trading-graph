@@ -122,8 +122,8 @@ class TestDataQualityValidation:
     def sample_data(self) -> pd.DataFrame:
         """Create sample OHLCV data for testing."""
         dates = pd.date_range(
-            start=datetime.now() - timedelta(days=100),
             end=datetime.now(),
+            periods=100,
             freq="D",
         )
         

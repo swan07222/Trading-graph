@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import threading
-import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum, auto
@@ -65,7 +64,7 @@ class Message:
             timestamp=datetime.fromisoformat(data["timestamp"]),
             message_id=data.get("message_id", ""),
             metadata=data.get("metadata", {}),
-        }
+        )
     
     @property
     def token_estimate(self) -> int:
@@ -133,6 +132,36 @@ class ConversationSummary:
             "created_at": self.created_at.isoformat(),
         }
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ConversationSummary:
+        """Deserialize summary payload with datetime normalization."""
+        raw_range = data.get("time_range", ())
+        if isinstance(raw_range, (list, tuple)) and len(raw_range) == 2:
+            start_raw, end_raw = raw_range
+        else:
+            now_iso = datetime.now().isoformat()
+            start_raw, end_raw = now_iso, now_iso
+
+        def _as_datetime(value: Any) -> datetime:
+            if isinstance(value, datetime):
+                return value
+            if isinstance(value, str):
+                try:
+                    return datetime.fromisoformat(value)
+                except ValueError:
+                    return datetime.now()
+            return datetime.now()
+
+        return cls(
+            summary_text=str(data.get("summary_text", "")),
+            key_points=list(data.get("key_points", [])),
+            entities_mentioned=list(data.get("entities_mentioned", [])),
+            commands_executed=list(data.get("commands_executed", [])),
+            time_range=(_as_datetime(start_raw), _as_datetime(end_raw)),
+            turn_count=int(data.get("turn_count", 0)),
+            created_at=_as_datetime(data.get("created_at", datetime.now().isoformat())),
+        )
+
 
 @dataclass
 class Conversation:
@@ -196,7 +225,7 @@ class Conversation:
             status=ConversationStatus[data["status"]],
             messages=[Message.from_dict(m) for m in data.get("messages", [])],
             turns=[ConversationTurn.from_dict(t) for t in data.get("turns", [])],
-            summary=ConversationSummary(**data["summary"]) if data.get("summary") else None,
+            summary=ConversationSummary.from_dict(data["summary"]) if data.get("summary") else None,
             created_at=datetime.fromisoformat(data["created_at"]),
             updated_at=datetime.fromisoformat(data["updated_at"]),
             metadata=data.get("metadata", {}),
@@ -530,7 +559,7 @@ class ContextManager:
         try:
             for file_path in self.storage_dir.glob("*.json"):
                 try:
-                    with open(file_path, "r", encoding="utf-8") as f:
+                    with open(file_path, encoding="utf-8") as f:
                         data = json.load(f)
                         conversation = Conversation.from_dict(data)
                         

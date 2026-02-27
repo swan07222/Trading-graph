@@ -1,15 +1,16 @@
 """China Network Diagnostics Utility.
 
-Provides comprehensive network testing for China mainland users:
-- Great Firewall connectivity tests
-- Chinese CDN endpoint quality
-- DNS resolution speed
-- Proxy connectivity
-- ISP-specific optimization recommendations
+Provides network testing for mainland China users:
+- Chinese financial endpoint connectivity
+- DNS resolution checks
+- Optional proxy connectivity checks
+- Actionable recommendations
 """
+
 from __future__ import annotations
 
 import socket
+import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -22,7 +23,8 @@ log = get_logger(__name__)
 
 @dataclass
 class TestResult:
-    """Result of a network test."""
+    """Result of a single network check."""
+
     name: str
     category: str
     success: bool
@@ -46,18 +48,9 @@ class TestResult:
 
 
 class ChinaNetworkDiagnostics:
-    """Comprehensive network diagnostics for China users.
-    
-    Tests:
-    - Financial data provider connectivity
-    - DNS resolution speed
-    - Great Firewall traversal
-    - Proxy functionality
-    - ISP-specific routing
-    """
+    """Comprehensive network diagnostics for China users."""
 
-    # Chinese financial data providers
-    FINANCIAL_ENDPOINTS = {
+    FINANCIAL_ENDPOINTS: dict[str, list[str]] = {
         "EastMoney": [
             "https://82.push2.eastmoney.com",
             "https://www.eastmoney.com",
@@ -89,8 +82,7 @@ class ChinaNetworkDiagnostics:
         ],
     }
 
-    # Chinese DNS servers
-    CHINA_DNS = [
+    CHINA_DNS: list[tuple[str, str]] = [
         ("114.114.114.114", "114DNS"),
         ("223.5.5.5", "AliDNS"),
         ("119.29.29.29", "DNSPod"),
@@ -108,37 +100,44 @@ class ChinaNetworkDiagnostics:
         category: str = "connectivity",
         timeout: float = 5.0,
     ) -> TestResult:
-        """Test connectivity to an endpoint."""
+        """Test endpoint connectivity."""
         import requests
 
         start = time.time()
-        error = ""
         success = False
+        error = ""
 
         try:
-            # Determine if URL is IP or hostname
             if url.startswith("http"):
                 response = requests.head(url, timeout=timeout, allow_redirects=True)
-                success = response.status_code in (200, 301, 302)
-                if not success:
+                if response.status_code in (200, 301, 302):
+                    success = True
+                elif response.status_code in (403, 405, 429):
+                    # A few providers reject HEAD; fallback to lightweight GET.
+                    with requests.get(
+                        url,
+                        timeout=timeout,
+                        allow_redirects=True,
+                        stream=True,
+                    ) as get_response:
+                        success = 200 <= get_response.status_code < 400
+                        if not success:
+                            error = f"HTTP {get_response.status_code}"
+                else:
                     error = f"HTTP {response.status_code}"
             else:
-                # IP address test (ping via socket)
-                socket.setdefaulttimeout(timeout)
-                socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect((url, 443))
-                success = True
-
+                with socket.create_connection((url, 443), timeout=timeout):
+                    success = True
         except requests.exceptions.Timeout:
             error = "Timeout"
-        except requests.exceptions.ConnectionError as e:
-            error = f"Connection error: {str(e)[:50]}"
+        except requests.exceptions.ConnectionError as exc:
+            error = f"Connection error: {str(exc)[:50]}"
         except TimeoutError:
             error = "Socket timeout"
-        except Exception as e:
-            error = str(e)[:100]
+        except Exception as exc:  # pragma: no cover - defensive fallback
+            error = str(exc)[:100]
 
         latency_ms = (time.time() - start) * 1000
-
         return TestResult(
             name=name,
             category=category,
@@ -156,24 +155,21 @@ class ChinaNetworkDiagnostics:
     ) -> TestResult:
         """Test DNS resolution speed."""
         start = time.time()
-        error = ""
         success = False
         resolved_ip = ""
+        error = ""
 
         try:
-            # Set DNS server (system-dependent)
-            # Note: Python doesn't support custom DNS servers directly
-            # This is a simplified test using system DNS
-            ip = socket.gethostbyname(hostname)
-            success = True
-            resolved_ip = ip
-        except socket.gaierror as e:
-            error = f"DNS resolution failed: {str(e)[:50]}"
-        except Exception as e:
-            error = str(e)[:100]
+            resolved_ip = self._resolve_dns(hostname, dns_server)
+            success = bool(resolved_ip)
+            if not success:
+                error = "No A record returned"
+        except socket.gaierror as exc:
+            error = f"DNS resolution failed: {str(exc)[:50]}"
+        except Exception as exc:  # pragma: no cover - defensive fallback
+            error = str(exc)[:100]
 
         latency_ms = (time.time() - start) * 1000
-
         return TestResult(
             name=f"DNS {dns_name}",
             category="dns",
@@ -188,6 +184,22 @@ class ChinaNetworkDiagnostics:
             },
         )
 
+    def _resolve_dns(self, hostname: str, dns_server: str) -> str:
+        """Resolve hostname via dnspython if available, else system resolver."""
+        try:
+            import dns.resolver  # type: ignore[import-untyped]
+        except Exception:
+            return socket.gethostbyname(hostname)
+
+        resolver = dns.resolver.Resolver(configure=False)
+        resolver.nameservers = [dns_server]
+        resolver.timeout = 3.0
+        resolver.lifetime = 3.0
+        answer = resolver.resolve(hostname, "A")
+        if not answer:
+            return ""
+        return answer[0].to_text()
+
     def test_proxy(
         self,
         proxy_url: str,
@@ -197,130 +209,114 @@ class ChinaNetworkDiagnostics:
         import requests
 
         start = time.time()
-        error = ""
         success = False
+        error = ""
 
         try:
-            proxies = {
-                "http": proxy_url,
-                "https": proxy_url,
-            }
-            response = requests.get(
-                test_url,
-                proxies=proxies,
-                timeout=10.0,
-            )
+            proxies = {"http": proxy_url, "https": proxy_url}
+            response = requests.get(test_url, proxies=proxies, timeout=10.0)
             success = response.status_code == 200
             if not success:
                 error = f"HTTP {response.status_code}"
         except requests.exceptions.Timeout:
             error = "Proxy timeout"
-        except requests.exceptions.ProxyError as e:
-            error = f"Proxy error: {str(e)[:50]}"
-        except Exception as e:
-            error = str(e)[:100]
+        except requests.exceptions.ProxyError as exc:
+            error = f"Proxy error: {str(exc)[:50]}"
+        except Exception as exc:  # pragma: no cover - defensive fallback
+            error = str(exc)[:100]
 
         latency_ms = (time.time() - start) * 1000
-
         return TestResult(
             name="Proxy Test",
             category="proxy",
             success=success,
             latency_ms=latency_ms,
             error=error,
-            details={
-                "proxy_url": proxy_url,
-                "test_url": test_url,
-            },
+            details={"proxy_url": proxy_url, "test_url": test_url},
         )
 
     def run_all_tests(self, proxy_url: str | None = None) -> dict[str, Any]:
-        """Run comprehensive network diagnostics.
-
-        Returns:
-            Dictionary with test results and recommendations
-        """
+        """Run all diagnostics and return a full report."""
         self.results = []
 
-        # Test Chinese financial endpoints
         log.info("Testing Chinese financial endpoints...")
         for provider, urls in self.FINANCIAL_ENDPOINTS.items():
             for url in urls:
-                result = self.test_endpoint(provider, url, "financial")
-                self.results.append(result)
+                self.results.append(self.test_endpoint(provider, url, "financial"))
 
-        # Test DNS resolution
         log.info("Testing DNS resolution...")
         for dns_ip, dns_name in self.CHINA_DNS:
-            # Note: This uses system DNS, not the specified server
-            # Real DNS server testing requires dnspython library
-            result = self.test_endpoint(
-                f"DNS {dns_name}",
-                f"https://{dns_ip}",
-                "dns",
-                timeout=3.0,
+            self.results.append(
+                self.test_dns_resolution(
+                    hostname="www.eastmoney.com",
+                    dns_server=dns_ip,
+                    dns_name=dns_name,
+                )
             )
-            self.results.append(result)
 
-        # Test proxy if provided
         if proxy_url:
             log.info("Testing proxy...")
-            result = self.test_proxy(proxy_url)
-            self.results.append(result)
+            self.results.append(self.test_proxy(proxy_url))
 
-        # Generate summary
         self._generate_summary()
-
         return self.get_report()
 
     def _generate_summary(self) -> None:
-        """Generate summary statistics and recommendations."""
+        """Build summary statistics and recommendations."""
         financial_results = [r for r in self.results if r.category == "financial"]
         dns_results = [r for r in self.results if r.category == "dns"]
         proxy_results = [r for r in self.results if r.category == "proxy"]
 
-        # Calculate success rates
         financial_success = sum(1 for r in financial_results if r.success)
         financial_total = len(financial_results)
-        financial_rate = financial_success / financial_total if financial_total > 0 else 0
+        financial_rate = financial_success / financial_total if financial_total else 0.0
 
-        # China-only mode: always assume china_direct
-        network_mode = "china_direct"
-
-        # Calculate average latencies
         financial_latencies = [r.latency_ms for r in financial_results if r.success]
         avg_financial_latency = (
             sum(financial_latencies) / len(financial_latencies)
-            if financial_latencies else 0
+            if financial_latencies
+            else 0.0
         )
 
-        # Generate recommendations
-        recommendations = []
-
+        recommendations: list[dict[str, str]] = []
         if financial_rate < 0.5:
-            recommendations.append({
-                "priority": "high",
-                "issue": "Poor connectivity to Chinese financial providers",
-                "suggestion": "Check firewall settings, try alternative DNS servers (114.114.114.114 or 223.5.5.5)",
-            })
-
+            recommendations.append(
+                {
+                    "priority": "high",
+                    "issue": "Poor connectivity to Chinese financial providers",
+                    "suggestion": (
+                        "Check firewall settings and try AliDNS (223.5.5.5) "
+                        "or 114DNS (114.114.114.114)."
+                    ),
+                }
+            )
         if avg_financial_latency > 2000:
-            recommendations.append({
-                "priority": "medium",
-                "issue": f"High latency to financial endpoints ({avg_financial_latency:.0f}ms)",
-                "suggestion": "Consider using a domestic CDN or proxy service",
-            })
+            recommendations.append(
+                {
+                    "priority": "medium",
+                    "issue": f"High latency to financial endpoints ({avg_financial_latency:.0f}ms)",
+                    "suggestion": "Consider a domestic proxy/CDN and reduce concurrent requests.",
+                }
+            )
+        if dns_results and sum(1 for r in dns_results if r.success) < (len(dns_results) / 2):
+            recommendations.append(
+                {
+                    "priority": "high",
+                    "issue": "DNS resolution issues detected",
+                    "suggestion": "Switch DNS servers to AliDNS or 114DNS.",
+                }
+            )
 
-        if dns_results and sum(1 for r in dns_results if r.success) < len(dns_results) / 2:
-            recommendations.append({
-                "priority": "high",
-                "issue": "DNS resolution issues detected",
-                "suggestion": "Change DNS servers to AliDNS (223.5.5.5) or 114DNS (114.114.114.114)",
-            })
+        if financial_rate > 0.7:
+            overall = "good"
+        elif financial_rate > 0.4:
+            overall = "fair"
+        else:
+            overall = "poor"
 
         self.summary = {
             "timestamp": datetime.now().isoformat(),
-            "network_mode": network_mode,
+            "network_mode": "china_direct",
             "financial_connectivity": {
                 "success_rate": round(financial_rate, 4),
                 "successful": financial_success,
@@ -336,74 +332,76 @@ class ChinaNetworkDiagnostics:
                 "successful": sum(1 for r in proxy_results if r.success),
             },
             "recommendations": recommendations,
-            "overall_health": "good" if financial_rate > 0.7 else "fair" if financial_rate > 0.4 else "poor",
+            "overall_health": overall,
         }
 
     def get_report(self) -> dict[str, Any]:
-        """Get full diagnostic report."""
+        """Return the full diagnostics report."""
         return {
             "summary": self.summary,
             "results": [r.to_dict() for r in self.results],
         }
 
+    @staticmethod
+    def _safe_terminal_text(text: str) -> str:
+        """Normalize text so it can be printed on non-UTF terminals."""
+        encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+        try:
+            text.encode(encoding)
+            return text
+        except UnicodeEncodeError:
+            return text.encode(encoding, errors="replace").decode(encoding, errors="replace")
+
+    def _print_line(self, text: str = "") -> None:
+        print(self._safe_terminal_text(text))
+
     def print_report(self) -> None:
-        """Print formatted diagnostic report."""
+        """Print a formatted diagnostics report."""
         if not self.summary:
             self._generate_summary()
 
-        print("\n" + "=" * 60)
-        print("CHINA NETWORK DIAGNOSTICS REPORT")
-        print("=" * 60)
-        print(f"Timestamp: {self.summary.get('timestamp', 'N/A')}")
-        print(f"Network Mode: {self.summary.get('network_mode', 'unknown')}")
-        print(f"Overall Health: {self.summary.get('overall_health', 'unknown')}")
-        print()
+        self._print_line("\n" + "=" * 60)
+        self._print_line("CHINA NETWORK DIAGNOSTICS REPORT")
+        self._print_line("=" * 60)
+        self._print_line(f"Timestamp: {self.summary.get('timestamp', 'N/A')}")
+        self._print_line(f"Network Mode: {self.summary.get('network_mode', 'unknown')}")
+        self._print_line(f"Overall Health: {self.summary.get('overall_health', 'unknown')}")
+        self._print_line()
 
-        # Financial connectivity
         fin = self.summary.get("financial_connectivity", {})
-        print("FINANCIAL ENDPOINTS:")
-        print(f"  Success Rate: {fin.get('success_rate', 0) * 100:.1f}%")
-        print(f"  Avg Latency: {fin.get('avg_latency_ms', 0):.0f}ms")
-        print()
+        self._print_line("FINANCIAL ENDPOINTS:")
+        self._print_line(f"  Success Rate: {fin.get('success_rate', 0) * 100:.1f}%")
+        self._print_line(f"  Avg Latency: {fin.get('avg_latency_ms', 0):.0f}ms")
+        self._print_line()
 
-        # Recommendations
         recommendations = self.summary.get("recommendations", [])
         if recommendations:
-            print("RECOMMENDATIONS:")
+            self._print_line("RECOMMENDATIONS:")
             for rec in recommendations:
-                priority_marker = "!!!" if rec["priority"] == "high" else "!"
-                print(f"  {priority_marker} [{rec['priority'].upper()}] {rec['issue']}")
-                print(f"      → {rec['suggestion']}")
+                self._print_line(f"  [{rec['priority'].upper()}] {rec['issue']}")
+                self._print_line(f"      -> {rec['suggestion']}")
         else:
-            print("RECOMMENDATIONS: None - Network configuration looks good!")
+            self._print_line("RECOMMENDATIONS: None - Network configuration looks good.")
 
-        print()
-        print("=" * 60)
+        self._print_line()
+        self._print_line("=" * 60)
 
-        # Detailed results
-        print("\nDETAILED RESULTS:")
-        print("-" * 60)
+        self._print_line("\nDETAILED RESULTS:")
+        self._print_line("-" * 60)
         for result in self.results:
-            status = "✓" if result.success else "✗"
+            status = "[OK]" if result.success else "[FAIL]"
             latency_str = f"{result.latency_ms:.0f}ms" if result.success else "N/A"
-            print(f"{status} {result.name}: {latency_str} {result.error}")
+            self._print_line(f"{status} {result.name}: {latency_str} {result.error}")
 
 
 def run_diagnostics(proxy_url: str | None = None) -> dict[str, Any]:
-    """Run China network diagnostics.
-    
-    Args:
-        proxy_url: Optional proxy URL to test
-        
-    Returns:
-        Diagnostic report dictionary
-    """
+    """Run China network diagnostics."""
     diagnostics = ChinaNetworkDiagnostics()
     return diagnostics.run_all_tests(proxy_url=proxy_url)
 
 
 def print_diagnostics(proxy_url: str | None = None) -> None:
-    """Run and print China network diagnostics."""
+    """Run China diagnostics and print formatted output."""
     diagnostics = ChinaNetworkDiagnostics()
     diagnostics.run_all_tests(proxy_url=proxy_url)
     diagnostics.print_report()
@@ -411,15 +409,14 @@ def print_diagnostics(proxy_url: str | None = None) -> None:
 
 if __name__ == "__main__":
     import argparse
+    import json
 
     parser = argparse.ArgumentParser(description="China Network Diagnostics")
     parser.add_argument("--proxy", type=str, help="Proxy URL to test")
     parser.add_argument("--json", action="store_true", help="Output as JSON")
-
     args = parser.parse_args()
 
     if args.json:
-        import json
         report = run_diagnostics(proxy_url=args.proxy)
         print(json.dumps(report, indent=2, ensure_ascii=False))
     else:

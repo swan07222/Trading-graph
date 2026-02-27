@@ -44,7 +44,97 @@
       "level": "info",
       "intent": "",
       "entities": {}
+    },
+    {
+      "timestamp": "12:02:20",
+      "sender": "AI",
+      "role": "assistant",
+      "text": "AI message feed ready.",
+      "level": "info",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "12:02:20",
+      "sender": "System",
+      "role": "system",
+      "text": "No trained GM model found. Please train GM.",
+      "level": "warning",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "12:02:20",
+      "sender": "System",
+      "role": "system",
+      "text": "System initialized - Ready for analysis",
+      "level": "info",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "12:02:23",
+      "sender": "System",
+      "role": "system",
+      "text": "Starting optimized LLM training (max 200 articles)...",
+      "level": "info",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "12:02:23",
+      "sender": "System",
+      "role": "system",
+      "text": "Starting optimized LLM hybrid training...",
+      "level": "info",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "12:20:01",
+      "sender": "AI",
+      "role": "assistant",
+      "text": "AI message feed ready.",
+      "level": "info",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "12:20:01",
+      "sender": "System",
+      "role": "system",
+      "text": "No trained GM model found. Please train GM.",
+      "level": "warning",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "12:20:01",
+      "sender": "System",
+      "role": "system",
+      "text": "System initialized - Ready for analysis",
+      "level": "info",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "12:20:51",
+      "sender": "System",
+      "role": "system",
+      "text": "No trained GM model found. Please train GM.",
+      "level": "warning",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "12:20:51",
+      "sender": "System",
+      "role": "system",
+      "text": "System initialized - Ready for analysis",
+      "level": "info",
+      "intent": "",
+      "entities": {}
     }
   ],
-  "saved_at": "2026-02-26T11:21:40.719387"
+  "saved_at": "2026-02-26T12:20:51.282636"
 }

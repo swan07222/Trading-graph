@@ -333,7 +333,7 @@ class SearchEngineManager:
         available = self.get_available_engines()
         return sorted(available, key=lambda e: self.CHINA_PRIORITY.get(e, 999))
 
-    async def record_success(self, engine: SearchEngine, latency_ms: float) -> None:
+    async def record_success(self, engine: SearchEngine, latency_ms: float = 0.0) -> None:
         """Record successful search operation."""
         async with self._lock:
             health = self._health.get(engine)
@@ -357,8 +357,15 @@ class SearchEngineManager:
             health = self._health.get(engine)
             return health.is_available() if health else False
 
-    def get_health(self, engine: SearchEngine) -> EngineHealth | None:
-        """Get health metrics for engine."""
+    def get_health(self, engine: SearchEngine) -> float:
+        """Get normalized health score for engine."""
+        health = self._health.get(engine)
+        if health is None:
+            return 0.0
+        return float(max(0.0, min(1.0, health.health_score)))
+
+    def get_health_state(self, engine: SearchEngine) -> EngineHealth | None:
+        """Get full health state for engine."""
         return self._health.get(engine)
 
     def get_all_health(self) -> dict[str, Any]:
@@ -816,6 +823,10 @@ class WebSearchEngine:
         # Content hash for deduplication
         self._content_hashes: dict[str, float] = {}
         self._hash_lock = asyncio.Lock()
+
+    def _calculate_quality_score(self, result: SearchResult, query: str) -> float:
+        """Compatibility wrapper for quality scoring."""
+        return float(self.quality_scorer.calculate_quality_score(result, query))
 
     async def _wait_rate_limit(self, engine: SearchEngine) -> None:
         """Wait for rate limit to be satisfied."""

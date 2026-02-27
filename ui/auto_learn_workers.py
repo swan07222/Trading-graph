@@ -55,19 +55,22 @@ def _get_auto_learner() -> Any | None:
     Returns the class, not an instance.
     """
     try:
-        from models.auto_learner import AutoLearner
+        from models import auto_learner as _auto_learner_module
+    except Exception as exc:
+        log.error("Failed to import models.auto_learner: %s", exc)
+        return None
 
-        return AutoLearner
-    except ImportError:
-        pass
+    auto_cls = getattr(_auto_learner_module, "AutoLearner", None)
+    if auto_cls is not None:
+        return auto_cls
 
-    try:
-        from models.auto_learner import ContinuousLearner
+    continuous_cls = getattr(_auto_learner_module, "ContinuousLearner", None)
+    if continuous_cls is not None:
+        return continuous_cls
 
-        return ContinuousLearner
-    except ImportError:
-        pass
-
+    log.error(
+        "models.auto_learner loaded, but AutoLearner/ContinuousLearner classes are missing."
+    )
     return None
 
 
@@ -167,7 +170,7 @@ class _BaseLearnWorker(QThread):
             stop_fn = getattr(self._learner, "stop", None)
             if callable(stop_fn):
                 try:
-                    stop_fn(join_timeout=6.0)
+                    stop_fn(join_timeout=30.0)
                 except TypeError:
                     stop_fn()
         except _WORKER_RECOVERABLE_EXCEPTIONS as exc:
@@ -191,6 +194,7 @@ class AutoLearnWorker(_BaseLearnWorker):
             "samples": 0,
             "accuracy": 0.0,
         }
+        learner_progress_errors: list[str] = []
 
         try:
             _force_china_direct_network_mode()
@@ -201,8 +205,8 @@ class AutoLearnWorker(_BaseLearnWorker):
             learner_class = _get_auto_learner()
             if learner_class is None:
                 self.error_occurred.emit(
-                    "AutoLearner/ContinuousLearner not found. "
-                    "Ensure models/auto_learner.py exists."
+                    "AutoLearner is unavailable. "
+                    "Check models/auto_learner.py and runtime dependencies."
                 )
                 return
 
@@ -257,14 +261,27 @@ class AutoLearnWorker(_BaseLearnWorker):
                 "success",
             )
 
+            learner_ref = self._learner
             self._start_and_wait(self._learner.start, learner_kwargs)
+            if learner_ref is not None:
+                try:
+                    progress_obj = getattr(learner_ref, "progress", None)
+                    learner_progress_errors = list(
+                        getattr(progress_obj, "errors", []) or []
+                    )
+                except _WORKER_RECOVERABLE_EXCEPTIONS:
+                    learner_progress_errors = []
             self._stop_learner()
 
             if self.token.is_cancelled or not self.running:
                 results["status"] = "stopped"
-            elif self._error_flag:
+            elif self._error_flag or learner_progress_errors:
                 results["status"] = "error"
-                results["error"] = self._error_message or "Auto-learning failed"
+                results["error"] = (
+                    self._error_message
+                    or (learner_progress_errors[-1] if learner_progress_errors else "")
+                    or "Auto-learning failed"
+                )
             else:
                 results["status"] = "ok"
             self.finished_result.emit(results)
@@ -273,6 +290,17 @@ class AutoLearnWorker(_BaseLearnWorker):
             error_msg = str(exc)
             log.error("AutoLearnWorker error: %s", error_msg)
             log.debug(traceback.format_exc())
+            self._stop_learner()
+            if self.running:
+                self.error_occurred.emit(error_msg)
+        except Exception as exc:
+            error_msg = str(exc)
+            log.error("AutoLearnWorker unexpected error: %s", error_msg)
+            try:
+                log.debug(traceback.format_exc())
+            except Exception:
+                pass
+            self._stop_learner()
             if self.running:
                 self.error_occurred.emit(error_msg)
 
@@ -289,6 +317,7 @@ class TargetedLearnWorker(_BaseLearnWorker):
             "accuracy": 0.0,
             "stocks_trained": [],
         }
+        learner_progress_errors: list[str] = []
 
         try:
             _force_china_direct_network_mode()
@@ -298,7 +327,10 @@ class TargetedLearnWorker(_BaseLearnWorker):
             )
             learner_class = _get_auto_learner()
             if learner_class is None:
-                self.error_occurred.emit("AutoLearner/ContinuousLearner not found.")
+                self.error_occurred.emit(
+                    "AutoLearner is unavailable. "
+                    "Check models/auto_learner.py and runtime dependencies."
+                )
                 return
 
             stock_codes = [str(c).strip() for c in list(self.config.get("stock_codes", []) or []) if str(c).strip()]
@@ -351,14 +383,27 @@ class TargetedLearnWorker(_BaseLearnWorker):
                 "success",
             )
 
+            learner_ref = self._learner
             self._start_and_wait(self._learner.start_targeted, learner_kwargs)
+            if learner_ref is not None:
+                try:
+                    progress_obj = getattr(learner_ref, "progress", None)
+                    learner_progress_errors = list(
+                        getattr(progress_obj, "errors", []) or []
+                    )
+                except _WORKER_RECOVERABLE_EXCEPTIONS:
+                    learner_progress_errors = []
             self._stop_learner()
 
             if self.token.is_cancelled or not self.running:
                 results["status"] = "stopped"
-            elif self._error_flag:
+            elif self._error_flag or learner_progress_errors:
                 results["status"] = "error"
-                results["error"] = self._error_message or "Targeted training failed"
+                results["error"] = (
+                    self._error_message
+                    or (learner_progress_errors[-1] if learner_progress_errors else "")
+                    or "Targeted training failed"
+                )
             else:
                 results["status"] = "ok"
             results["stocks_trained"] = stock_codes
@@ -371,6 +416,17 @@ class TargetedLearnWorker(_BaseLearnWorker):
                 log.debug(traceback.format_exc())
             except (AttributeError, TypeError, ValueError):
                 pass
+            self._stop_learner()
+            if self.running:
+                self.error_occurred.emit(error_msg)
+        except Exception as exc:
+            error_msg = str(exc)
+            log.error("TargetedLearnWorker unexpected error: %s", error_msg)
+            try:
+                log.debug(traceback.format_exc())
+            except Exception:
+                pass
+            self._stop_learner()
             if self.running:
                 self.error_occurred.emit(error_msg)
 

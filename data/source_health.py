@@ -142,12 +142,14 @@ class SourceHealthState:
         error_component = 1.0 - self.error_rate
         
         # Weighted average
-        self._health_score = (
+        base_score = (
             0.40 * success_component +
             0.30 * consecutive_component +
             0.20 * response_component +
             0.10 * error_component
         )
+        failure_penalty = min(0.35, float(self.consecutive_failures) * 0.06)
+        self._health_score = max(0.0, min(1.0, base_score - failure_penalty))
     
     @property
     def health_score(self) -> float:

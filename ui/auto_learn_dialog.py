@@ -675,13 +675,18 @@ class AutoLearnDialog(QDialog):
         if self._is_running:
             return
 
-        LearnerClass = _get_auto_learner()
+        try:
+            LearnerClass = _get_auto_learner()
+        except Exception as exc:
+            LearnerClass = None
+            log.error("AutoLearner availability check failed: %s", exc)
+
         if LearnerClass is None:
             QMessageBox.critical(
                 self,
-                "Module Not Found",
-                "AutoLearner module not found.\n\n"
-                "Ensure models/auto_learner.py exists.",
+                "Auto Train GM Unavailable",
+                "AutoLearner module is unavailable.\n\n"
+                "Check runtime dependencies and console logs for import errors.",
             )
             return
 
@@ -872,7 +877,7 @@ class AutoLearnDialog(QDialog):
             self.auto_interval_combo.setEnabled(False)
             self.auto_horizon_spin.setEnabled(True)
             self.discover_check.setEnabled(True)
-            self.incremental_check.setEnabled(True)
+            self.incremental_check.setEnabled(False)
             if hasattr(self, "use_session_cache_check"):
                 self.use_session_cache_check.setEnabled(True)
 
@@ -1254,9 +1259,27 @@ class AutoLearnDialog(QDialog):
                 if self.worker:
                     self.worker.stop()
                     self.worker.wait(5000)
+                    if self.worker.isRunning():
+                        QMessageBox.warning(
+                            self,
+                            "Stopping",
+                            "Auto Train GM is still finalizing the current step.\n"
+                            "Please wait a bit and try closing again.",
+                        )
+                        event.ignore()
+                        return
                 if self.targeted_worker:
                     self.targeted_worker.stop()
                     self.targeted_worker.wait(5000)
+                    if self.targeted_worker.isRunning():
+                        QMessageBox.warning(
+                            self,
+                            "Stopping",
+                            "Targeted training is still finalizing.\n"
+                            "Please wait a bit and try closing again.",
+                        )
+                        event.ignore()
+                        return
                 if self._validator:
                     self._validator.wait(2000)
                     self._validator = None

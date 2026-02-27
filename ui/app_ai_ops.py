@@ -821,6 +821,7 @@ def _show_llm_train_dialog(self: Any, auto_start: bool = False) -> Any | None:
             dialog.session_finished.connect(self._on_llm_training_session_finished)
         dialog.destroyed.connect(_on_destroyed)
 
+    dialog.setModal(False)
     dialog.show()
     dialog.raise_()
     dialog.activateWindow()
@@ -842,17 +843,11 @@ def _auto_train_llm(self: Any) -> None:
     """Open Auto Train LLM control panel (non-modal)."""
     dialog = self._show_llm_train_dialog(auto_start=False)
     if dialog is not None:
-        # Ensure dialog is visible and on top on Windows
-        from PyQt6.QtCore import Qt
-        dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
-        dialog.show()
-        dialog.raise_()
-        dialog.activateWindow()
         if hasattr(self, "log"):
             self.log("Auto Train LLM panel opened.", "info")
     else:
         if hasattr(self, "log"):
-            self.log("Failed to open Auto Train LLM panel — check log for errors.", "error")
+            self.log("Failed to open Auto Train LLM panel - check log for errors.", "error")
 
 
 def _set_news_policy_signal(self: Any, symbol: str, payload: dict[str, Any]) -> None:

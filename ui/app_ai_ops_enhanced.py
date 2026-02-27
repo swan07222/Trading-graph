@@ -1553,20 +1553,34 @@ def _auto_train_llm(self: Any) -> None:
         from ui import app_ai_ops as _original
         if hasattr(_original, '_auto_train_llm'):
             _original._auto_train_llm(self)
+            return
     except _UI_AI_RECOVERABLE_EXCEPTIONS:
         log.debug("Original _auto_train_llm not available")
+    # Fallback path
+    if hasattr(self, "_show_llm_train_dialog"):
+        dialog = self._show_llm_train_dialog(auto_start=False)
+        if dialog is None and hasattr(self, "log"):
+            self.log("Auto Train LLM dialog not available.", "error")
 
-def _show_llm_train_dialog(self: Any) -> None:
+def _show_llm_train_dialog(self: Any, auto_start: bool = False) -> Any | None:
     """Show LLM train dialog (compatibility wrapper)."""
     try:
         from ui import app_ai_ops as _original
         if hasattr(_original, '_show_llm_train_dialog'):
-            _original._show_llm_train_dialog(self)
+            return _original._show_llm_train_dialog(self, auto_start=bool(auto_start))
     except _UI_AI_RECOVERABLE_EXCEPTIONS:
         log.debug("Original _show_llm_train_dialog not available")
+    return None
 
-def _on_llm_training_session_finished(self: Any) -> None:
+def _on_llm_training_session_finished(self: Any, payload: dict[str, Any]) -> None:
     """Handle LLM training session finished (compatibility wrapper)."""
+    try:
+        from ui import app_ai_ops as _original
+        if hasattr(_original, "_on_llm_training_session_finished"):
+            _original._on_llm_training_session_finished(self, payload)
+            return
+    except _UI_AI_RECOVERABLE_EXCEPTIONS:
+        pass
     if hasattr(self, "_refresh_model_training_statuses"):
         self._refresh_model_training_statuses()
 
