@@ -37,6 +37,7 @@ class _DummyBarApp:
     _ts_to_epoch = _app_bar_ops._ts_to_epoch
     _epoch_to_iso = _app_bar_ops._epoch_to_iso
     _bar_safety_caps = _app_bar_ops._bar_safety_caps
+    _synthetic_tick_jump_cap = _app_bar_ops._synthetic_tick_jump_cap
     _sanitize_ohlc = _app_bar_ops._sanitize_ohlc
     _is_intraday_day_boundary = _app_bar_ops._is_intraday_day_boundary
     _bar_trading_date = _app_bar_ops._bar_trading_date
@@ -355,3 +356,28 @@ def test_sanitize_ohlc_5m_compacts_thin_spike_wicks() -> None:
     # 5m bars may be wider than 1m, but should still avoid tall spike bars.
     assert span_pct < 0.008
     assert span_pct < (body_pct + 0.0055)
+
+
+def test_bar_safety_caps_noncanonical_minute_interval_is_conservative() -> None:
+    app = _DummyBarApp(ui_interval="1m")
+
+    jump_cap, range_cap = app._bar_safety_caps("2m")
+
+    assert 0.08 <= float(jump_cap) <= 0.11
+    assert 0.006 <= float(range_cap) <= 0.012
+
+
+def test_synthetic_tick_jump_cap_noncanonical_minute_interval_is_conservative() -> None:
+    app = _DummyBarApp(ui_interval="1m")
+
+    cap = app._synthetic_tick_jump_cap("2m")
+
+    assert 0.012 <= float(cap) <= 0.020
+
+
+def test_normalize_interval_token_maps_minute_aliases() -> None:
+    app = _DummyBarApp(ui_interval="1m")
+
+    assert app._normalize_interval_token("1min") == "1m"
+    assert app._normalize_interval_token("5minute") == "5m"
+    assert app._normalize_interval_token("weekly") == "1wk"

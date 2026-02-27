@@ -6,6 +6,7 @@ from statistics import median
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
 from config.settings import CONFIG
 from utils.logger import get_logger
@@ -1110,7 +1111,16 @@ def _render_chart_state(
     if predicted_prepared and pred_vals:
         # Already shaped by _prepare_chart_predicted_prices upstream;
         # re-processing with a different anchor can distort or empty them.
-        chart_predicted = list(pred_vals)
+        chart_predicted = []
+        for raw_v in pred_vals:
+            try:
+                fv = float(raw_v)
+            except _UI_RECOVERABLE_EXCEPTIONS:
+                continue
+            if fv > 0 and math.isfinite(fv):
+                chart_predicted.append(float(fv))
+        if steps > 0:
+            chart_predicted = chart_predicted[:int(steps)]
     else:
         chart_predicted = self._prepare_chart_predicted_prices(
             symbol=sym,
@@ -1134,6 +1144,70 @@ def _render_chart_state(
         anchor_price=anchor_for_pred,
         context=context,
     )
+
+    # === LLM LIMITATIONS FIX: Validate prediction before rendering ===
+    # This addresses hallucinations, context limits, knowledge cutoff, and reasoning
+    if (
+        hasattr(self, "predictor")
+        and self.predictor is not None
+        and hasattr(self.predictor, "validate_prediction")
+        and arr
+        and chart_predicted
+    ):
+        try:
+            from models.predictor_types import Prediction
+
+            # Create a temporary Prediction object for validation
+            temp_pred = Prediction(
+                stock_code=sym,
+                predicted_price=float(chart_predicted[0]) if chart_predicted else 0,
+                confidence=float(getattr(self.current_prediction, "confidence", 0.5)) if hasattr(self, "current_prediction") else 0.5,
+            )
+
+            # Build context for validation
+            validation_context = {
+                "current_price": anchor_for_pred or 0,
+                "interval": iv,
+                "avg_volume": float(np.mean([b.get("volume", 0) for b in arr[-20:]])) if arr else 0,
+                "volatility": float(np.std([b.get("close", 0) for b in arr[-20:]])) if arr else 0,
+            }
+
+            # Convert bars to DataFrame for validation
+            hist_df = pd.DataFrame(arr) if arr else pd.DataFrame()
+
+            # Run validation
+            validation_result = self.predictor.validate_prediction(
+                prediction=temp_pred,
+                historical_data=hist_df,
+                context=validation_context,
+                stock_code=sym,
+            )
+
+            # Log validation result
+            if not validation_result.get("is_safe_to_use", True):
+                log.warning(
+                    "Prediction validation failed for %s: %s",
+                    sym,
+                    validation_result.get("recommendations", []),
+                )
+
+                # Adjust prediction confidence or flag in UI
+                if hasattr(self, "current_prediction") and self.current_prediction:
+                    # Store validation info for UI display
+                    self.current_prediction.validation_status = validation_result.get(
+                        "is_safe_to_use", True
+                    )
+                    self.current_prediction.validation_confidence = validation_result.get(
+                        "confidence_adjusted", temp_pred.confidence
+                    )
+                    self.current_prediction.validation_issues = validation_result.get(
+                        "recommendations", []
+                    )
+
+        except Exception as e:
+            # Non-critical: validation is optional enhancement
+            log.debug("Prediction validation skipped: %s", e)
+    # === END LLM LIMITATIONS FIX ===
 
     if (
         reset_view_on_symbol_switch

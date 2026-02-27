@@ -629,7 +629,232 @@
       "level": "info",
       "intent": "",
       "entities": {}
+    },
+    {
+      "timestamp": "05:04:24",
+      "sender": "AI",
+      "role": "assistant",
+      "text": "AI message feed ready.",
+      "level": "info",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "05:04:25",
+      "sender": "System",
+      "role": "system",
+      "text": "No trained GM model found. Please train GM.",
+      "level": "warning",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "05:04:25",
+      "sender": "System",
+      "role": "system",
+      "text": "System initialized - Ready for analysis",
+      "level": "info",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "05:04:54",
+      "sender": "System",
+      "role": "system",
+      "text": "No model loaded. Please train a model first.",
+      "level": "error",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "05:05:07",
+      "sender": "System",
+      "role": "system",
+      "text": "No model loaded. Please train a model first.",
+      "level": "error",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "05:05:18",
+      "sender": "System",
+      "role": "system",
+      "text": "No model loaded. Please train a model first.",
+      "level": "error",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "05:05:25",
+      "sender": "System",
+      "role": "system",
+      "text": "No model loaded. Please train a model first.",
+      "level": "error",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "05:05:30",
+      "sender": "System",
+      "role": "system",
+      "text": "No model loaded. Please train a model first.",
+      "level": "error",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "05:05:33",
+      "sender": "System",
+      "role": "system",
+      "text": "No model loaded. Please train a model first.",
+      "level": "error",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "05:05:37",
+      "sender": "System",
+      "role": "system",
+      "text": "No model loaded. Please train a model first.",
+      "level": "error",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "05:07:02",
+      "sender": "AI",
+      "role": "assistant",
+      "text": "AI message feed ready.",
+      "level": "info",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "05:07:02",
+      "sender": "System",
+      "role": "system",
+      "text": "No trained GM model found. Please train GM.",
+      "level": "warning",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "05:07:02",
+      "sender": "System",
+      "role": "system",
+      "text": "System initialized - Ready for analysis",
+      "level": "info",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "05:07:13",
+      "sender": "System",
+      "role": "system",
+      "text": "No model loaded. Please train a model first.",
+      "level": "error",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "05:07:25",
+      "sender": "System",
+      "role": "system",
+      "text": "No model loaded. Please train a model first.",
+      "level": "error",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "05:20:46",
+      "sender": "AI",
+      "role": "assistant",
+      "text": "AI message feed ready.",
+      "level": "info",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "05:20:47",
+      "sender": "System",
+      "role": "system",
+      "text": "No trained GM model found. Please train GM.",
+      "level": "warning",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "05:20:47",
+      "sender": "System",
+      "role": "system",
+      "text": "System initialized - Ready for analysis",
+      "level": "info",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "05:20:54",
+      "sender": "System",
+      "role": "system",
+      "text": "No model loaded. Please train a model first.",
+      "level": "error",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "05:20:59",
+      "sender": "System",
+      "role": "system",
+      "text": "No model loaded. Please train a model first.",
+      "level": "error",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "05:21:05",
+      "sender": "System",
+      "role": "system",
+      "text": "No model loaded. Please train a model first.",
+      "level": "error",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "05:21:08",
+      "sender": "System",
+      "role": "system",
+      "text": "No model loaded. Please train a model first.",
+      "level": "error",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "05:21:11",
+      "sender": "System",
+      "role": "system",
+      "text": "No model loaded. Please train a model first.",
+      "level": "error",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "05:21:13",
+      "sender": "System",
+      "role": "system",
+      "text": "No model loaded. Please train a model first.",
+      "level": "error",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "05:21:16",
+      "sender": "System",
+      "role": "system",
+      "text": "No model loaded. Please train a model first.",
+      "level": "error",
+      "intent": "",
+      "entities": {}
     }
   ],
-  "saved_at": "2026-02-27T04:45:48.848721"
+  "saved_at": "2026-02-27T05:21:16.442608"
 }

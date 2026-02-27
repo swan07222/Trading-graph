@@ -843,6 +843,43 @@ def _bar_safety_caps(self: Any, interval: str) -> tuple[float, float]:
         return 0.24, 0.24
     if iv in ("1wk", "1mo"):
         return 0.35, 0.40
+    try:
+        if iv.endswith("m"):
+            mins = float(iv[:-1])
+            if math.isfinite(mins) and mins > 0:
+                if mins <= 60.0:
+                    points = [
+                        (1.0, 0.08, 0.006),
+                        (5.0, 0.10, 0.012),
+                        (15.0, 0.14, 0.020),
+                        (60.0, 0.18, 0.040),
+                    ]
+                    for i in range(1, len(points)):
+                        lo_m, lo_jump, lo_range = points[i - 1]
+                        hi_m, hi_jump, hi_range = points[i]
+                        if mins <= hi_m:
+                            span = max(hi_m - lo_m, 1e-8)
+                            frac = (mins - lo_m) / span
+                            jump = lo_jump + ((hi_jump - lo_jump) * frac)
+                            rng = lo_range + ((hi_range - lo_range) * frac)
+                            return float(jump), float(rng)
+                    return 0.18, 0.040
+                # Keep odd long intraday buckets conservative (for example 90m).
+                frac = min(1.0, max(0.0, (mins - 60.0) / 180.0))
+                return (
+                    float(0.18 + (0.04 * frac)),
+                    float(0.040 + (0.060 * frac)),
+                )
+        if iv.endswith("s"):
+            secs = float(iv[:-1])
+            if math.isfinite(secs) and secs > 0:
+                frac = min(1.0, max(0.0, secs / 60.0))
+                return (
+                    float(0.05 + (0.03 * frac)),
+                    float(0.003 + (0.003 * frac)),
+                )
+    except _APP_SOFT_EXCEPTIONS:
+        pass
     return 0.20, 0.15
 
 def _synthetic_tick_jump_cap(self: Any, interval: str) -> float:
@@ -860,6 +897,32 @@ def _synthetic_tick_jump_cap(self: Any, interval: str) -> float:
         return 0.045
     if iv in ("1d", "1wk", "1mo"):
         return 0.12
+    try:
+        if iv.endswith("m"):
+            mins = float(iv[:-1])
+            if math.isfinite(mins) and mins > 0:
+                points = [
+                    (1.0, 0.012),
+                    (5.0, 0.018),
+                    (15.0, 0.028),
+                    (60.0, 0.045),
+                ]
+                for i in range(1, len(points)):
+                    lo_m, lo_cap = points[i - 1]
+                    hi_m, hi_cap = points[i]
+                    if mins <= hi_m:
+                        span = max(hi_m - lo_m, 1e-8)
+                        frac = (mins - lo_m) / span
+                        return float(lo_cap + ((hi_cap - lo_cap) * frac))
+                frac = min(1.0, max(0.0, (mins - 60.0) / 180.0))
+                return float(0.045 + (0.035 * frac))
+        if iv.endswith("s"):
+            secs = float(iv[:-1])
+            if math.isfinite(secs) and secs > 0:
+                frac = min(1.0, max(0.0, secs / 60.0))
+                return float(0.008 + (0.004 * frac))
+    except _APP_SOFT_EXCEPTIONS:
+        pass
     return 0.03
 
 def _sanitize_ohlc(

@@ -239,6 +239,25 @@ class StockChart(QWidget):
         except (TypeError, ValueError):
             return []
 
+    @staticmethod
+    def _coerce_price_list(values: object | None) -> list[float]:
+        """Convert optional iterable values to positive finite float list."""
+        out: list[float] = []
+        if values is None:
+            return out
+        try:
+            raw = list(values)
+        except (TypeError, ValueError):
+            return out
+        for v in raw:
+            try:
+                fv = float(v)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if fv > 0 and math.isfinite(fv):
+                out.append(float(fv))
+        return out
+
     def _dbg_log(
         self,
         key: str,
@@ -630,9 +649,10 @@ class StockChart(QWidget):
         """
         self._bars = self._coerce_list(bars)
         # FIX Bug #1: Properly handle None/empty predicted arrays
-        self._predicted_prices = self._coerce_list(predicted_prices) if predicted_prices else []
-        self._predicted_prices_low = self._coerce_list(predicted_prices_low) if predicted_prices_low else []
-        self._predicted_prices_high = self._coerce_list(predicted_prices_high) if predicted_prices_high else []
+        # and tolerate partial invalid values from upstream payloads.
+        self._predicted_prices = self._coerce_price_list(predicted_prices)
+        self._predicted_prices_low = self._coerce_price_list(predicted_prices_low)
+        self._predicted_prices_high = self._coerce_price_list(predicted_prices_high)
         self._levels = levels or {}
         self._candle_meta = []
 
@@ -683,9 +703,24 @@ class StockChart(QWidget):
                 "1h": "60m",
                 "60min": "60m",
                 "60mins": "60m",
+                "60minute": "60m",
+                "60minutes": "60m",
+                "1hour": "60m",
                 "daily": "1d",
                 "1day": "1d",
                 "day": "1d",
+                "1min": "1m",
+                "5min": "5m",
+                "15min": "15m",
+                "30min": "30m",
+                "1minute": "1m",
+                "5minute": "5m",
+                "15minute": "15m",
+                "30minute": "30m",
+                "week": "1wk",
+                "weekly": "1wk",
+                "month": "1mo",
+                "monthly": "1mo",
             }
             default_iv = interval_aliases.get(default_iv_raw, default_iv_raw)
             try:
@@ -1467,6 +1502,42 @@ class StockChart(QWidget):
             return 0.24, 0.24
         if iv in ("1wk", "1mo"):
             return 0.35, 0.40
+        try:
+            if iv.endswith("m"):
+                mins = float(iv[:-1])
+                if math.isfinite(mins) and mins > 0:
+                    if mins <= 60.0:
+                        points = [
+                            (1.0, 0.08, 0.006),
+                            (5.0, 0.10, 0.012),
+                            (15.0, 0.14, 0.020),
+                            (60.0, 0.18, 0.040),
+                        ]
+                        for i in range(1, len(points)):
+                            lo_m, lo_jump, lo_range = points[i - 1]
+                            hi_m, hi_jump, hi_range = points[i]
+                            if mins <= hi_m:
+                                span = max(hi_m - lo_m, 1e-8)
+                                frac = (mins - lo_m) / span
+                                jump = lo_jump + ((hi_jump - lo_jump) * frac)
+                                rng = lo_range + ((hi_range - lo_range) * frac)
+                                return float(jump), float(rng)
+                        return 0.18, 0.040
+                    frac = min(1.0, max(0.0, (mins - 60.0) / 180.0))
+                    return (
+                        float(0.18 + (0.04 * frac)),
+                        float(0.040 + (0.060 * frac)),
+                    )
+            if iv.endswith("s"):
+                secs = float(iv[:-1])
+                if math.isfinite(secs) and secs > 0:
+                    frac = min(1.0, max(0.0, secs / 60.0))
+                    return (
+                        float(0.05 + (0.03 * frac)),
+                        float(0.003 + (0.003 * frac)),
+                    )
+        except (TypeError, ValueError, OverflowError):
+            pass
         return 0.20, 0.15
 
     def _sanitize_render_ohlc(

@@ -2523,3 +2523,101 @@ Predictor._get_atr_pct = _predictor_runtime_ops._get_atr_pct
 Predictor._generate_reasons = _predictor_runtime_ops._generate_reasons
 Predictor._get_stock_name = _predictor_runtime_ops._get_stock_name
 Predictor._clean_code = _predictor_runtime_ops._clean_code
+
+# LLM Limitations Mitigation Integration
+# Import and attach the unified prediction validator
+try:
+    from ai.llm_limitations_fix import (
+        UnifiedPredictionValidator,
+        get_prediction_validator,
+        HallucinationDetector,
+        ExtendedContextManager,
+        RealTimeKnowledgeIntegrator,
+        ReasoningValidator,
+    )
+    LLM_LIMITATIONS_FIX_AVAILABLE = True
+except ImportError:
+    LLM_LIMITATIONS_FIX_AVAILABLE = False
+    get_prediction_validator = None  # type: ignore[assignment]
+    UnifiedPredictionValidator = None  # type: ignore[assignment]
+    HallucinationDetector = None  # type: ignore[assignment]
+    ExtendedContextManager = None  # type: ignore[assignment]
+    RealTimeKnowledgeIntegrator = None  # type: ignore[assignment]
+    ReasoningValidator = None  # type: ignore[assignment]
+
+
+def _validate_prediction_with_llm_fixes(
+    self,
+    prediction: Prediction,
+    historical_data: pd.DataFrame,
+    context: dict[str, Any],
+    stock_code: str = "",
+) -> dict[str, Any]:
+    """
+    Validate prediction using LLM limitations mitigation module.
+
+    This addresses four key LLM limitations:
+    1. Hallucinations - via multi-layer validation
+    2. Limited context - via extended context window
+    3. Knowledge cutoff - via real-time data integration
+    4. No reasoning - via rule-based validation layer
+
+    Args:
+        prediction: Model prediction to validate
+        historical_data: Historical price data
+        context: Current market context
+        stock_code: Stock symbol for real-time data
+
+    Returns:
+        Validation result dict with:
+        - is_safe_to_use: bool
+        - confidence_adjusted: float
+        - validation_reports: list
+        - recommendations: list
+    """
+    if not LLM_LIMITATIONS_FIX_AVAILABLE:
+        # Fallback: return original prediction without validation
+        return {
+            "is_safe_to_use": True,
+            "confidence_adjusted": float(prediction.confidence),
+            "validation_reports": [],
+            "recommendations": [],
+            "warning": "LLM limitations fix module not available",
+        }
+
+    validator = get_prediction_validator()
+
+    # Convert Prediction to dict
+    pred_dict = {
+        "predicted_price": float(prediction.predicted_price),
+        "confidence": float(prediction.confidence),
+        "model_agreement": float(getattr(prediction, "model_agreement", 1.0)),
+        "predicted_volume": float(getattr(prediction, "volume", 0)),
+        "predicted_rsi": float(getattr(prediction, "rsi", 50)),
+    }
+
+    # Run validation
+    result = validator.validate(
+        prediction=pred_dict,
+        historical_data=historical_data,
+        context=context,
+        stock_code=stock_code,
+        fetcher=getattr(self, "fetcher", None),
+        news_aggregator=None,  # Optional: pass news aggregator if available
+    )
+
+    # Log validation result
+    if not result["is_safe_to_use"]:
+        log.warning(
+            "Prediction validation failed for %s: confidence %.2f -> %.2f, issues: %s",
+            stock_code or "unknown",
+            result["confidence_original"],
+            result["confidence_adjusted"],
+            result["recommendations"],
+        )
+
+    return result
+
+
+# Attach validation method to Predictor
+Predictor.validate_prediction = _validate_prediction_with_llm_fixes  # type: ignore[method-assign]
