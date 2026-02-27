@@ -2,6 +2,7 @@
 import math
 import time
 from collections import Counter
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -786,6 +787,7 @@ class StockChart(QWidget):
                         b.get("interval", default_iv) or default_iv
                     ).lower()
                     bar_iv = interval_aliases.get(bar_iv_raw, bar_iv_raw)
+                    close_only_mode = bool(b.get("_close_only_fallback", False))
                     ts_text = self._format_bar_timestamp(b)
                     # Rendering layer keeps only basic OHLC normalization.
                     if o <= 0:
@@ -846,6 +848,7 @@ class StockChart(QWidget):
                             "interval": str(bar_iv),
                             "timestamp": b.get("timestamp", b.get("time", "")),
                             "_ts_epoch": b.get("_ts_epoch", None),
+                            "_close_only_fallback": bool(close_only_mode),
                         }
                     )
 
@@ -1349,20 +1352,43 @@ class StockChart(QWidget):
         BACKWARD COMPATIBLE: Converts price list to bar format,
         then delegates to update_chart() so all three layers work.
         """
-        bars = []
+        bars: list[dict[str, float | str | bool]] = []
+        prices: list[float] = []
         for p in actual_prices:
             try:
                 price = float(p)
                 if price > 0:
-                    bars.append({
-                        "open": price,
-                        "high": price,
-                        "low": price,
-                        "close": price,
-                        "interval": "1m",
-                    })
+                    prices.append(price)
             except (ValueError, TypeError):
                 continue
+
+        if prices:
+            step_seconds = 60.0
+            base_epoch = float(time.time()) - (float(max(0, len(prices) - 1)) * step_seconds)
+            prev_close: float | None = None
+            for idx, close in enumerate(prices):
+                open_price = float(prev_close) if (prev_close is not None and prev_close > 0) else float(close)
+                body = abs(float(close) - float(open_price))
+                # Keep tiny synthetic wicks so close-only fallback doesn't render as a dense doji block.
+                wick = max(body * 0.35, float(close) * 0.0008)
+                high = max(float(open_price), float(close)) + float(wick)
+                low = max(0.01, min(float(open_price), float(close)) - float(wick))
+                ts_epoch = float(base_epoch + (float(idx) * step_seconds))
+                bars.append(
+                    {
+                        "open": float(open_price),
+                        "high": float(high),
+                        "low": float(low),
+                        "close": float(close),
+                        "volume": 0.0,
+                        "amount": 0.0,
+                        "_ts_epoch": float(ts_epoch),
+                        "timestamp": datetime.fromtimestamp(ts_epoch).isoformat(timespec="seconds"),
+                        "interval": "1m",
+                        "_close_only_fallback": True,
+                    }
+                )
+                prev_close = float(close)
 
         self.update_chart(
             bars,
@@ -1497,11 +1523,56 @@ class StockChart(QWidget):
                 top = c
                 bot = c
                 body = 0.0
-            wick_allow = max(0.0, max_range - body)
-            h = min(h, top + (wick_allow * 0.5))
-            low = max(low, bot - (wick_allow * 0.5))
+            intraday = str(interval or "").strip().lower() not in ("1d", "1wk", "1mo")
+            if intraday:
+                wick_each_cap = max(body * 0.85, float(anchor) * 0.0007)
+                wick_each_cap = min(wick_each_cap, max_range * 0.18)
+                # Enforce span budget after body so compacted bars remain
+                # valid instead of getting dropped by the final range guard.
+                wick_each_cap = min(
+                    wick_each_cap,
+                    max(0.0, (max_range - body) * 0.5),
+                )
+                h = min(h, top + wick_each_cap)
+                low = max(low, bot - wick_each_cap)
+            else:
+                wick_allow = max(0.0, max_range - body)
+                h = min(h, top + (wick_allow * 0.5))
+                low = max(low, bot - (wick_allow * 0.5))
             if h < low:
                 h, low = low, h
+
+        # Intraday soft-span guard: keep visual wick span close to body
+        # so sporadic vendor outliers don't create tall vertical spikes.
+        iv_norm = str(interval or "").strip().lower()
+        if iv_norm not in ("1d", "1wk", "1mo"):
+            body_pct = abs(o - c) / max(anchor, 1e-8)
+            span_pct = abs(h - low) / max(anchor, 1e-8)
+            span_buffer_map = {
+                "1m": 0.0022,
+                "5m": 0.0032,
+                "15m": 0.0048,
+                "30m": 0.0048,
+                "60m": 0.0075,
+                "1h": 0.0075,
+            }
+            span_buffer = float(span_buffer_map.get(iv_norm, 0.0045))
+            soft_cap_pct = float(
+                max(
+                    body_pct + 0.0012,
+                    min(float(range_cap) * 0.85, body_pct + span_buffer),
+                )
+            )
+            if span_pct > soft_cap_pct:
+                top = max(o, c)
+                bot = min(o, c)
+                body = max(0.0, top - bot)
+                target_span = float(anchor) * soft_cap_pct
+                wick_each = max(0.0, (target_span - body) * 0.5)
+                h = min(h, top + wick_each)
+                low = max(low, bot - wick_each)
+                if h < low:
+                    h, low = low, h
 
         o = min(max(o, low), h)
         c = min(max(c, low), h)

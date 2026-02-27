@@ -24,6 +24,100 @@ _UI_RECOVERABLE_EXCEPTIONS = COMMON_RECOVERABLE_EXCEPTIONS
 def _lazy_get(module: str, name: str) -> Any:
     return getattr(import_module(module), name)
 
+
+def _build_price_history_fallback_bars(
+    self,
+    *,
+    prices: list[float],
+    interval: str,
+) -> list[dict[str, Any]]:
+    """Build synthetic timestamped OHLC bars from close-only history.
+
+    This keeps fallback charts visually stable and avoids dense doji blocks.
+    
+    FIX: Improved candle visualization with proper wick/body ratios.
+    """
+    iv = self._normalize_interval_token(interval, fallback="1m")
+    clean_prices: list[float] = []
+    for px_raw in list(prices or []):
+        try:
+            px = float(px_raw)
+        except _UI_RECOVERABLE_EXCEPTIONS:
+            continue
+        if px > 0 and math.isfinite(px):
+            clean_prices.append(float(px))
+    if not clean_prices:
+        return []
+
+    step_seconds = 60
+    if hasattr(self, "_interval_seconds"):
+        try:
+            step_seconds = int(max(1, int(self._interval_seconds(iv))))
+        except _UI_RECOVERABLE_EXCEPTIONS:
+            step_seconds = 60
+
+    end_epoch = float(time.time())
+    if hasattr(self, "_bar_bucket_epoch"):
+        try:
+            end_epoch = float(self._bar_bucket_epoch(end_epoch, iv))
+        except _UI_RECOVERABLE_EXCEPTIONS:
+            end_epoch = float(time.time())
+    base_epoch = float(end_epoch - (float(max(0, len(clean_prices) - 1)) * float(step_seconds)))
+
+    out: list[dict[str, Any]] = []
+    prev_close: float | None = None
+    for i, close in enumerate(clean_prices):
+        open_price = float(prev_close) if (prev_close is not None and prev_close > 0) else float(close)
+        body = abs(float(close) - float(open_price))
+        
+        # FIX: Calculate realistic wick based on price level and body size
+        # Use 0.2%-0.5% of price as base wick, scaled by body size
+        base_wick_pct = 0.003  # 0.3% of price as typical intrabar range
+        wick_from_body = body * 0.5  # 50% of body size adds to wick
+        wick_from_price = float(close) * base_wick_pct
+        wick = max(wick_from_body, wick_from_price)
+        
+        # High is above both open and close
+        high = max(float(open_price), float(close)) + float(wick)
+        # Low is below both open and close  
+        low = min(float(open_price), float(close)) - float(wick)
+        # Ensure low is positive
+        low = max(0.01, float(low))
+
+        ts_epoch = float(base_epoch + (float(i) * float(step_seconds)))
+        if hasattr(self, "_bar_bucket_epoch"):
+            try:
+                ts_epoch = float(self._bar_bucket_epoch(ts_epoch, iv))
+            except _UI_RECOVERABLE_EXCEPTIONS:
+                pass
+
+        ts_text = ""
+        if hasattr(self, "_epoch_to_iso"):
+            try:
+                ts_text = str(self._epoch_to_iso(ts_epoch))
+            except _UI_RECOVERABLE_EXCEPTIONS:
+                ts_text = ""
+        if not ts_text:
+            ts_text = datetime.fromtimestamp(ts_epoch).isoformat(timespec="seconds")
+
+        out.append(
+            {
+                "open": float(open_price),
+                "high": float(high),
+                "low": float(low),
+                "close": float(close),
+                "volume": 0.0,
+                "amount": 0.0,
+                "timestamp": str(ts_text),
+                "_ts_epoch": float(ts_epoch),
+                "final": True,
+                "interval": str(iv),
+                "_close_only_fallback": True,
+            }
+        )
+        prev_close = float(close)
+    return out
+
 def _quick_trade(self, pred: Any) -> None:
     """Quick trade from signal."""
     self.stock_input.setText(pred.stock_code)
@@ -529,7 +623,7 @@ def _on_analysis_done(self, pred: Any, request_seq: int | None = None) -> None:
             ):
                 fallback_prices = [float(current_price)]
 
-            if fallback_prices and hasattr(self, "chart") and hasattr(self.chart, "update_data"):
+            if fallback_prices and hasattr(self, "chart"):
                 max_points = int(
                     max(
                         40,
@@ -570,27 +664,36 @@ def _on_analysis_done(self, pred: Any, request_seq: int | None = None) -> None:
                     log.debug("Fallback chart uncertainty bands failed: %s", exc)
 
                 try:
-                    self.chart.update_data(
-                        fallback_prices,
-                        predicted_prices=display_predicted,
-                        predicted_prices_low=low_band,
-                        predicted_prices_high=high_band,
-                        levels=self._get_levels_dict(),
-                    )
                     fallback_iv = self._normalize_interval_token(interval)
-                    self._bars_by_symbol[symbol] = [
-                        {
-                            "open": float(px),
-                            "high": float(px),
-                            "low": float(px),
-                            "close": float(px),
-                            "interval": fallback_iv,
-                        }
-                        for px in fallback_prices
-                    ]
+                    fallback_bars = _build_price_history_fallback_bars(
+                        self,
+                        prices=fallback_prices,
+                        interval=fallback_iv,
+                    )
+
+                    if hasattr(self.chart, "update_chart") and fallback_bars:
+                        self.chart.update_chart(
+                            fallback_bars,
+                            predicted_prices=display_predicted,
+                            predicted_prices_low=low_band,
+                            predicted_prices_high=high_band,
+                            levels=self._get_levels_dict(),
+                        )
+                    elif hasattr(self.chart, "update_data"):
+                        self.chart.update_data(
+                            fallback_prices,
+                            predicted_prices=display_predicted,
+                            predicted_prices_low=low_band,
+                            predicted_prices_high=high_band,
+                            levels=self._get_levels_dict(),
+                        )
+                    else:
+                        raise AttributeError("Chart has no update_chart/update_data method")
+
+                    self._bars_by_symbol[symbol] = list(fallback_bars)
                     self._update_chart_latest_label(
                         symbol,
-                        bar=None,
+                        bar=(fallback_bars[-1] if fallback_bars else None),
                         price=(current_price if current_price > 0 else anchor_price),
                     )
                     chart_rendered = True

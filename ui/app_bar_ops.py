@@ -949,11 +949,61 @@ def _sanitize_ohlc(
             top = c
             bot = c
             body = 0.0
-        wick_allow = max(0.0, max_range - body)
-        h = min(h, top + (wick_allow * 0.5))
-        low = max(low, bot - (wick_allow * 0.5))
+        # Intraday feed glitch guard: if provider injects day-range highs/lows
+        # into minute bars, keep only compact wicks around the candle body.
+        intraday = iv not in ("1d", "1wk", "1mo")
+        if intraday:
+            wick_each_cap = max(body * 0.85, float(anchor) * 0.0007)
+            wick_each_cap = min(wick_each_cap, max_range * 0.18)
+            # Keep total span within the allowed envelope so valid bars
+            # are compacted instead of being dropped as malformed.
+            wick_each_cap = min(
+                wick_each_cap,
+                max(0.0, (max_range - body) * 0.5),
+            )
+            h = min(h, top + wick_each_cap)
+            low = max(low, bot - wick_each_cap)
+        else:
+            wick_allow = max(0.0, max_range - body)
+            h = min(h, top + (wick_allow * 0.5))
+            low = max(low, bot - (wick_allow * 0.5))
         if h < low:
             h, low = low, h
+
+    # Intraday soft-span guard: keep wick span near candle body so
+    # occasional provider spikes do not render as tall barcode lines.
+    if iv not in ("1d", "1wk", "1mo") and anchor > 0:
+        try:
+            body_pct = abs(o - c) / float(anchor)
+            span_pct = abs(h - low) / float(anchor)
+        except _APP_SOFT_EXCEPTIONS:
+            body_pct = 0.0
+            span_pct = 0.0
+        span_buffer_map = {
+            "1m": 0.0022,
+            "5m": 0.0032,
+            "15m": 0.0048,
+            "30m": 0.0048,
+            "60m": 0.0075,
+            "1h": 0.0075,
+        }
+        span_buffer = float(span_buffer_map.get(iv, 0.0045))
+        soft_cap_pct = float(
+            max(
+                body_pct + 0.0012,
+                min(float(effective_range_cap) * 0.85, body_pct + span_buffer),
+            )
+        )
+        if span_pct > soft_cap_pct:
+            top = max(o, c)
+            bot = min(o, c)
+            body = max(0.0, top - bot)
+            target_span = float(anchor) * soft_cap_pct
+            wick_each = max(0.0, (target_span - body) * 0.5)
+            h = min(h, top + wick_each)
+            low = max(low, bot - wick_each)
+            if h < low:
+                h, low = low, h
 
     o = min(max(o, low), h)
     c = min(max(c, low), h)

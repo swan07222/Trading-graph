@@ -311,3 +311,47 @@ def test_scrub_chart_bars_recovers_when_prepare_returns_empty() -> None:
 
     assert len(out) == 1
     assert abs(float(out[0]["close"]) - 10.0) < 1e-9
+
+
+def test_sanitize_ohlc_intraday_compacts_extreme_vendor_wicks() -> None:
+    app = _DummyBarApp(ui_interval="1m")
+
+    out = app._sanitize_ohlc(
+        229.800,
+        300.000,
+        120.000,
+        229.420,
+        interval="1m",
+        ref_close=229.700,
+    )
+
+    assert out is not None
+    o, h, low, c = out
+    anchor = 229.700
+    span_pct = abs(float(h) - float(low)) / anchor
+    body_pct = abs(float(o) - float(c)) / anchor
+    # Prevent barcode-like candles after sanitization.
+    assert span_pct < 0.005
+    assert span_pct < (body_pct + 0.004)
+
+
+def test_sanitize_ohlc_5m_compacts_thin_spike_wicks() -> None:
+    app = _DummyBarApp(ui_interval="5m")
+
+    out = app._sanitize_ohlc(
+        229.95,
+        250.00,
+        200.00,
+        229.90,
+        interval="5m",
+        ref_close=229.92,
+    )
+
+    assert out is not None
+    o, h, low, c = out
+    anchor = 229.92
+    span_pct = abs(float(h) - float(low)) / anchor
+    body_pct = abs(float(o) - float(c)) / anchor
+    # 5m bars may be wider than 1m, but should still avoid tall spike bars.
+    assert span_pct < 0.008
+    assert span_pct < (body_pct + 0.0055)
