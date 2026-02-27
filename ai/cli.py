@@ -310,9 +310,26 @@ def health(ctx):
 
 @cli.command("train-self-chat")
 @click.option("--chat-history", default="data/chat_history/chat_history.json", help="Chat history JSON path")
-@click.option("--epochs", default=2, type=int, help="Training epochs")
-@click.option("--max-steps", default=1200, type=int, help="Max optimizer steps")
-def train_self_chat(chat_history, epochs, max_steps):
+@click.option("--epochs", default=3, type=int, help="Training epochs")
+@click.option("--max-steps", default=3000, type=int, help="Max optimizer steps")
+@click.option(
+    "--profile",
+    default="professional",
+    type=click.Choice(["fast", "balanced", "professional"], case_sensitive=False),
+    help="Training profile",
+)
+@click.option(
+    "--training-backend",
+    default="auto",
+    type=click.Choice(["auto", "scratch", "pretrained_lora"], case_sensitive=False),
+    help="Training backend (auto picks pretrained_lora for professional profile)",
+)
+@click.option(
+    "--base-model",
+    default="Qwen/Qwen2.5-1.5B-Instruct",
+    help="Pretrained base model for professional backend",
+)
+def train_self_chat(chat_history, epochs, max_steps, profile, training_backend, base_model):
     """Train a self-owned local transformer chat model."""
     from ai.self_chat_trainer import SelfChatTrainingConfig, train_self_chat_model
 
@@ -320,10 +337,17 @@ def train_self_chat(chat_history, epochs, max_steps):
     cfg.chat_history_path = Path(str(chat_history))
     cfg.epochs = max(1, int(epochs))
     cfg.max_steps = max(100, int(max_steps))
+    cfg.training_profile = str(profile or "balanced").strip().lower()
+    cfg.training_backend = str(training_backend or "auto").strip().lower()
+    cfg.base_model_name = str(base_model or "").strip() or "Qwen/Qwen2.5-1.5B-Instruct"
 
     print("Training self chat transformer...")
     print(f"- chat history: {cfg.chat_history_path}")
     print(f"- output dir: {cfg.output_dir}")
+    print(f"- profile: {cfg.training_profile}")
+    print(f"- backend: {cfg.training_backend}")
+    if cfg.training_backend in {"auto", "pretrained_lora"}:
+        print(f"- base model: {cfg.base_model_name}")
     print(f"- epochs: {cfg.epochs}")
     print(f"- max steps: {cfg.max_steps}")
     print("")

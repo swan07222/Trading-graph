@@ -300,6 +300,7 @@ def _load_chart_history_bars(
 
         if selected_date is not None:
             selected_out: list[dict[str, Any]] = []
+            dated_rows: list[tuple[date, dict[str, Any]]] = []
             for row in out:
                 ts_raw = row.get("_ts_epoch", row.get("timestamp"))
                 try:
@@ -314,9 +315,28 @@ def _load_chart_history_bars(
                     ).date()
                 except _APP_CHART_RECOVERABLE_EXCEPTIONS:
                     row_date = datetime.fromtimestamp(epoch).date()
+                dated_rows.append((row_date, row))
                 if row_date == selected_date:
                     selected_out.append(row)
-            out = selected_out
+
+            if selected_out:
+                out = selected_out
+            elif dated_rows and norm_iv not in {"1d", "1wk", "1mo"}:
+                # Keep intraday chart usable when "today" has no bars yet
+                # (pre-open, weekend, holiday, timezone skew).
+                latest_date = max(d for d, _ in dated_rows)
+                out = [row for d, row in dated_rows if d == latest_date]
+                log.info(
+                    "Chart date %s has no intraday bars for %s (%s); "
+                    "falling back to latest available session %s (%d bars)",
+                    selected_date.isoformat(),
+                    symbol,
+                    norm_iv,
+                    latest_date.isoformat(),
+                    len(out),
+                )
+            else:
+                out = selected_out
 
         return out[-lookback:]
     except _APP_CHART_RECOVERABLE_EXCEPTIONS as e:

@@ -2222,8 +2222,12 @@ class LLM_sentimentAnalyzer:
         self,
         *,
         chat_history_path: str | Path = "data/chat_history/chat_history.json",
-        max_steps: int = 1200,
-        epochs: int = 2,
+        max_steps: int = 3000,
+        epochs: int = 3,
+        training_profile: str = "professional",
+        training_backend: str = "auto",
+        base_model_name: str = "Qwen/Qwen2.5-1.5B-Instruct",
+        allow_scratch_fallback: bool = True,
     ) -> dict[str, Any]:
         """Train a local transformer chat model from your own corpus."""
         try:
@@ -2235,6 +2239,10 @@ class LLM_sentimentAnalyzer:
                 training_corpus_path=self._training_corpus_path,
                 epochs=max(1, int(epochs)),
                 max_steps=max(100, int(max_steps)),
+                training_profile=str(training_profile or "balanced"),
+                training_backend=str(training_backend or "auto"),
+                base_model_name=str(base_model_name or "Qwen/Qwen2.5-1.5B-Instruct"),
+                allow_scratch_fallback=bool(allow_scratch_fallback),
             )
             report = dict(train_self_chat_model(cfg) or {})
             # Force chat backend reload so new model is used immediately.

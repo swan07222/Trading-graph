@@ -326,7 +326,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         ai_menu.addAction(auto_learn_action)
 
         train_llm_action = QAction("Train &LLM", self)
-        train_llm_action.triggered.connect(self._start_llm_training)
+        train_llm_action.triggered.connect(self._auto_train_llm)
         ai_menu.addAction(train_llm_action)
 
         auto_train_llm_action = QAction("&Auto Train LLM", self)

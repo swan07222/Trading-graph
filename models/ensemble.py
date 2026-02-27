@@ -1663,7 +1663,7 @@ class EnsembleModel:
                 for name, model in models:
                     out = model(torch.FloatTensor(X).to(self.device))
                     logits = out["logits"] if isinstance(out, dict) else out
-                    probs = F.softmax(logits, dim=-1).cpu().numpy()
+                    probs = F.softmax(logits, dim=-1).detach().cpu().numpy()
                     batch_probs.append(probs)
 
             # Weighted average across models
@@ -1811,7 +1811,9 @@ class EnsembleModel:
                     model.eval()
                     out = model(X_t)
                     logits = out["logits"] if isinstance(out, dict) else out
-                    per_model_probs[name] = F.softmax(logits, dim=-1).cpu().numpy()
+                    per_model_probs[name] = (
+                        F.softmax(logits, dim=-1).detach().cpu().numpy()
+                    )
 
                     w = weights.get(name, 1.0 / max(1, len(models)))
                     if weighted_logits is None:
@@ -1833,20 +1835,28 @@ class EnsembleModel:
                     for name, model in models:
                         model.train()  # Enable dropout
                     
-                    for _ in range(mc_samples):
-                        mc_logits: torch.Tensor | None = None
-                        for name, model in models:
-                            out = model(X_t)
-                            logits_mc = out["logits"] if isinstance(out, dict) else out
-                            w = weights.get(name, 1.0 / max(1, len(models)))
-                            if mc_logits is None:
-                                mc_logits = logits_mc * w
-                            else:
-                                mc_logits = mc_logits + logits_mc * w
-                        
-                        if mc_logits is not None:
-                            mc_probs = F.softmax(mc_logits / temp, dim=-1).cpu().numpy()
-                            mc_probs_list.append(mc_probs)
+                    with torch.no_grad():
+                        for _ in range(mc_samples):
+                            mc_logits: torch.Tensor | None = None
+                            for name, model in models:
+                                out = model(X_t)
+                                logits_mc = (
+                                    out["logits"] if isinstance(out, dict) else out
+                                )
+                                w = weights.get(name, 1.0 / max(1, len(models)))
+                                if mc_logits is None:
+                                    mc_logits = logits_mc * w
+                                else:
+                                    mc_logits = mc_logits + logits_mc * w
+
+                            if mc_logits is not None:
+                                mc_probs = (
+                                    F.softmax(mc_logits / temp, dim=-1)
+                                    .detach()
+                                    .cpu()
+                                    .numpy()
+                                )
+                                mc_probs_list.append(mc_probs)
                     
                     # Set models back to eval mode
                     for name, model in models:
@@ -1883,7 +1893,9 @@ class EnsembleModel:
                     )
                 continue
 
-            final_probs = F.softmax(weighted_logits / temp, dim=-1).cpu().numpy()
+            final_probs = (
+                F.softmax(weighted_logits / temp, dim=-1).detach().cpu().numpy()
+            )
 
             # FIX #PRED-002: Validate softmax output
             if final_probs is None or final_probs.size == 0:

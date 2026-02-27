@@ -488,6 +488,7 @@ def _on_analysis_done(self, pred: Any, request_seq: int | None = None) -> None:
 
     predicted_prices = list(getattr(pred, "predicted_prices", []) or [])
 
+    chart_rendered = False
     if symbol:
         arr = self._load_chart_history_bars(symbol, interval, lookback)
         arr = self._filter_bars_to_market_session(arr, interval)
@@ -509,8 +510,101 @@ def _on_analysis_done(self, pred: Any, request_seq: int | None = None) -> None:
                     update_latest_label=True,
                     reset_view_on_symbol_switch=True,
                 )
+                chart_rendered = True
             except _UI_RECOVERABLE_EXCEPTIONS as e:
                 log.debug(f"Chart update failed: {e}")
+        if not chart_rendered:
+            fallback_prices: list[float] = []
+            for px_raw in list(getattr(pred, "price_history", []) or []):
+                try:
+                    px = float(px_raw)
+                except _UI_RECOVERABLE_EXCEPTIONS:
+                    continue
+                if px > 0 and math.isfinite(px):
+                    fallback_prices.append(px)
+            if (
+                not fallback_prices
+                and current_price > 0
+                and math.isfinite(current_price)
+            ):
+                fallback_prices = [float(current_price)]
+
+            if fallback_prices and hasattr(self, "chart") and hasattr(self.chart, "update_data"):
+                max_points = int(
+                    max(
+                        40,
+                        min(
+                            600,
+                            int(self.lookback_spin.value()) if hasattr(self, "lookback_spin") else 180,
+                        ),
+                    )
+                )
+                fallback_prices = fallback_prices[-max_points:]
+                anchor_price = float(fallback_prices[-1]) if fallback_prices else 0.0
+                display_predicted = list(predicted_prices)
+                try:
+                    display_predicted = self._prepare_chart_predicted_prices(
+                        symbol=symbol,
+                        chart_interval=interval,
+                        predicted_prices=predicted_prices,
+                        source_interval=self._normalize_interval_token(
+                            getattr(pred, "interval", interval),
+                            fallback=interval,
+                        ),
+                        current_price=anchor_price if anchor_price > 0 else None,
+                        target_steps=int(self.forecast_spin.value()),
+                    )
+                except _UI_RECOVERABLE_EXCEPTIONS as exc:
+                    log.debug("Fallback chart prediction shaping failed: %s", exc)
+
+                low_band: list[float] = []
+                high_band: list[float] = []
+                try:
+                    low_band, high_band = self._build_chart_prediction_bands(
+                        symbol=symbol,
+                        predicted_prices=display_predicted,
+                        anchor_price=anchor_price if anchor_price > 0 else None,
+                        chart_interval=interval,
+                    )
+                except _UI_RECOVERABLE_EXCEPTIONS as exc:
+                    log.debug("Fallback chart uncertainty bands failed: %s", exc)
+
+                try:
+                    self.chart.update_data(
+                        fallback_prices,
+                        predicted_prices=display_predicted,
+                        predicted_prices_low=low_band,
+                        predicted_prices_high=high_band,
+                        levels=self._get_levels_dict(),
+                    )
+                    fallback_iv = self._normalize_interval_token(interval)
+                    self._bars_by_symbol[symbol] = [
+                        {
+                            "open": float(px),
+                            "high": float(px),
+                            "low": float(px),
+                            "close": float(px),
+                            "interval": fallback_iv,
+                        }
+                        for px in fallback_prices
+                    ]
+                    self._update_chart_latest_label(
+                        symbol,
+                        bar=None,
+                        price=(current_price if current_price > 0 else anchor_price),
+                    )
+                    chart_rendered = True
+                    self._debug_console(
+                        f"analysis_chart_fallback:{symbol}:{interval}",
+                        (
+                            f"analysis chart fallback for {symbol}: "
+                            f"history unavailable, using {len(fallback_prices)} close points"
+                        ),
+                        min_gap_seconds=1.0,
+                        level="warning",
+                    )
+                except _UI_RECOVERABLE_EXCEPTIONS as exc:
+                    log.debug("Fallback chart render failed for %s: %s", symbol, exc)
 
     # Update details (with news sentiment)
     self._update_details(pred)

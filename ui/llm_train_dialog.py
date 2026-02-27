@@ -374,7 +374,7 @@ class LLMTrainDialog(QDialog):
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setMinimumHeight(24)
-        self.progress_bar.setFormat("0%")
+        self.progress_bar.setFormat("%p%")
         progress_layout.addWidget(self.progress_bar)
 
         root.addWidget(progress_group)
@@ -420,7 +420,7 @@ class LLMTrainDialog(QDialog):
         if running:
             if not keep_progress:
                 self.progress_bar.setValue(0)
-                self.progress_bar.setFormat("0%")
+                self.progress_bar.setFormat("%p%")
                 self._last_progress_percent = 0
             self.start_btn.setEnabled(False)
             self.resume_btn.setEnabled(False)
@@ -436,7 +436,8 @@ class LLMTrainDialog(QDialog):
             return
 
         self.start_btn.setEnabled(True)
-        self.resume_btn.setEnabled(bool(self._elapsed_seconds > 0 and self.progress_bar.value() < 100))
+        # Allow resume whenever a prior session ran, regardless of final progress value
+        self.resume_btn.setEnabled(bool(self._elapsed_seconds > 0))
         self.stop_btn.setEnabled(False)
         self.close_btn.setEnabled(True)
         self.hours_back_spin.setEnabled(True)
@@ -446,7 +447,8 @@ class LLMTrainDialog(QDialog):
         self.accumulate_check.setEnabled(True)
         self.boost_ratio_spin.setEnabled(True)
         self.max_corpus_spin.setEnabled(True)
-        self.worker = None
+        # NOTE: self.worker is cleared by callers after the thread has finished,
+        # not here, to avoid premature None-ing while the QThread is still cleaning up.
 
     def _start_training(self, resume: bool = False) -> None:
         if self._is_running:
@@ -522,7 +524,6 @@ class LLMTrainDialog(QDialog):
         p = int(max(0, min(100, int(percent))))
         self._last_progress_percent = p
         self.progress_bar.setValue(p)
-        self.progress_bar.setFormat(f"{p}%")
         msg = str(message or "").strip()
         if msg:
             self.status_label.setText(msg)
@@ -534,8 +535,9 @@ class LLMTrainDialog(QDialog):
 
         if status == "stopped":
             self._set_running(False)
+            self.worker = None
             self.status_label.setText("Stopped")
-            self.progress_bar.setFormat("Stopped")
+            self.progress_bar.setFormat("%p%")
             self._log("LLM auto-training stopped.", "warning")
             cycles = int(payload.get("cycles_completed", 0) or 0)
             if cycles > 0:
@@ -554,16 +556,18 @@ class LLMTrainDialog(QDialog):
         if status in {"error", "failed"}:
             err = str(payload.get("error", "LLM auto-training failed"))
             self._set_running(False)
+            self.worker = None
             self.status_label.setText("Failed")
-            self.progress_bar.setFormat("Failed")
+            self.progress_bar.setFormat("%p%")
             self._log(f"LLM auto-training failed: {err}", "error")
             self.session_finished.emit(payload)
             QMessageBox.critical(self, "Auto Train LLM Failed", err[:500])
             return
 
         self._set_running(False)
+        self.worker = None
         self.progress_bar.setValue(100)
-        self.progress_bar.setFormat("Complete")
+        self.progress_bar.setFormat("%p%")
         self.status_label.setText("Complete")
         self.resume_btn.setEnabled(False)
         self._log(
@@ -593,8 +597,9 @@ class LLMTrainDialog(QDialog):
         self._stop_elapsed_clock()
         err = str(error or "Unknown error")
         self._set_running(False)
+        self.worker = None
         self.status_label.setText("Failed")
-        self.progress_bar.setFormat("Failed")
+        self.progress_bar.setFormat("%p%")
         self._log(f"Error: {err}", "error")
         self.session_finished.emit({"status": "error", "error": err})
         QMessageBox.critical(self, "Auto Train LLM Error", err[:500])
@@ -664,16 +669,25 @@ class LLMTrainDialog(QDialog):
                 return
             if self.worker is not None:
                 self.worker.stop()
-                self.worker.wait(5000)
+                # Non-blocking: if the worker is still running after signalling stop,
+                # hide the dialog immediately and let the thread finish on its own.
+                # The thread holds only a reference to the stop_event; it will exit
+                # gracefully without requiring us to block the GUI thread.
                 if self.worker.isRunning():
-                    QMessageBox.warning(
-                        self,
-                        "Stopping",
-                        "LLM auto-training is still finalizing the current step.\n"
-                        "Please wait a bit and try closing again.",
-                    )
-                    event.ignore()
-                    return
+                    self.hide()
+                    # Allow the thread up to 500 ms to exit; if it does, accept.
+                    # Either way we do NOT block the GUI event loop.
+                    finished = self.worker.wait(500)
+                    if not finished:
+                        # Thread still running — disconnect signals to avoid callbacks
+                        # on a partially-destroyed dialog, then accept anyway.
+                        try:
+                            self.worker.progress.disconnect()
+                            self.worker.log_message.disconnect()
+                            self.worker.finished_result.disconnect()
+                            self.worker.error_occurred.disconnect()
+                        except RuntimeError:
+                            pass
             self._stop_elapsed_clock()
             event.accept()
         else:

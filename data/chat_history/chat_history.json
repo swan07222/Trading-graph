@@ -89,7 +89,187 @@
       "level": "info",
       "intent": "",
       "entities": {}
+    },
+    {
+      "timestamp": "01:08:51",
+      "sender": "AI",
+      "role": "assistant",
+      "text": "AI message feed ready.",
+      "level": "info",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "01:08:52",
+      "sender": "System",
+      "role": "system",
+      "text": "No trained GM model found. Please train GM.",
+      "level": "warning",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "01:08:52",
+      "sender": "System",
+      "role": "system",
+      "text": "System initialized - Ready for analysis",
+      "level": "info",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "01:09:46",
+      "sender": "System",
+      "role": "system",
+      "text": "GM training completed successfully.",
+      "level": "success",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "01:09:46",
+      "sender": "System",
+      "role": "system",
+      "text": "GM model loaded successfully",
+      "level": "success",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "01:09:46",
+      "sender": "System",
+      "role": "system",
+      "text": "Subscribed to feeds for 10 stocks",
+      "level": "info",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "01:09:46",
+      "sender": "System",
+      "role": "system",
+      "text": "Monitoring started: 1m interval, 60 bar forecast",
+      "level": "success",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "01:09:46",
+      "sender": "System",
+      "role": "system",
+      "text": "System initialized - Ready for analysis",
+      "level": "info",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "01:09:56",
+      "sender": "System",
+      "role": "system",
+      "text": "Analysis complete: 001325 - HOLD (38%)",
+      "level": "success",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "01:10:29",
+      "sender": "System",
+      "role": "system",
+      "text": "Analysis complete: 001220 - HOLD (38%)",
+      "level": "success",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "01:11:54",
+      "sender": "AI",
+      "role": "assistant",
+      "text": "AI message feed ready.",
+      "level": "info",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "01:11:54",
+      "sender": "System",
+      "role": "system",
+      "text": "GM model loaded successfully",
+      "level": "success",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "01:11:54",
+      "sender": "System",
+      "role": "system",
+      "text": "Subscribed to feeds for 12 stocks",
+      "level": "info",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "01:11:54",
+      "sender": "System",
+      "role": "system",
+      "text": "Monitoring started: 1m interval, 60 bar forecast",
+      "level": "success",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "01:11:54",
+      "sender": "System",
+      "role": "system",
+      "text": "System initialized - Ready for analysis",
+      "level": "info",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "01:21:16",
+      "sender": "AI",
+      "role": "assistant",
+      "text": "AI message feed ready.",
+      "level": "info",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "01:21:16",
+      "sender": "System",
+      "role": "system",
+      "text": "GM model loaded successfully",
+      "level": "success",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "01:21:16",
+      "sender": "System",
+      "role": "system",
+      "text": "Subscribed to feeds for 13 stocks",
+      "level": "info",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "01:21:16",
+      "sender": "System",
+      "role": "system",
+      "text": "Monitoring started: 1m interval, 60 bar forecast",
+      "level": "success",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "01:21:16",
+      "sender": "System",
+      "role": "system",
+      "text": "System initialized - Ready for analysis",
+      "level": "info",
+      "intent": "",
+      "entities": {}
     }
   ],
-  "saved_at": "2026-02-27T00:39:39.224059"
+  "saved_at": "2026-02-27T01:21:16.783809"
 }

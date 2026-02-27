@@ -658,16 +658,22 @@ def _start_llm_training(self: Any) -> None:
         )
 
     def _work() -> dict[str, Any]:
+        import os as _os
         from data.llm_sentiment import get_llm_analyzer
         from data.news_collector import get_collector
 
         analyzer = get_llm_analyzer()
         collector = get_collector()
+        # Collect news first so chat model trains on freshest corpus
         articles = collector.collect_news(limit=450, hours_back=120)
+        # Use absolute path for chat history to avoid cwd-relative failures
+        _base = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+        _chat_path = _os.path.join(_base, "data", "chat_history", "chat_history.json")
         chat_report = analyzer.train_chat_model(
-            chat_history_path="data/chat_history/chat_history.json",
-            max_steps=1800,
-            epochs=2,
+            chat_history_path=_chat_path,
+            max_steps=3000,
+            epochs=3,
+            training_profile="professional",
         )
         if articles:
             report = dict(analyzer.train(articles, max_samples=1000) or {})
@@ -703,6 +709,9 @@ def _start_llm_training(self: Any) -> None:
         return out
 
     worker = WorkerThread(_work, timeout_seconds=1200)
+    # Register in workers dict BEFORE _track_worker to prevent race where
+    # a concurrent check finds the key missing while thread is starting
+    self.workers["llm_train"] = worker
     self._track_worker(worker)
 
     def _on_done(payload: Any) -> None:
@@ -748,7 +757,6 @@ def _start_llm_training(self: Any) -> None:
 
     worker.result.connect(_on_done)
     worker.error.connect(_on_error)
-    self.workers["llm_train"] = worker
     worker.start()
 
 
