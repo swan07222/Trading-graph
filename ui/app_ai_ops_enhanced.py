@@ -1,4 +1,4 @@
-# ui/app_ai_ops_enhanced.py
+﻿# ui/app_ai_ops_enhanced.py
 """Enhanced AI operations module with improved NLU, persistence, and safety.
 
 Fixes implemented:
@@ -29,6 +29,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable
 
+from config.settings import CONFIG, TradingMode
 from ui.background_tasks import WorkerThread
 from utils.logger import get_logger
 from utils.recoverable import COMMON_RECOVERABLE_EXCEPTIONS
@@ -52,7 +53,39 @@ MAX_RETRY_ATTEMPTS = 3
 RETRY_BACKOFF_BASE = 2  # Exponential backoff base
 SENTIMENT_CACHE_TTL = 300  # 5 minutes cache
 LLM_TRAINING_MAX_ARTICLES = 200  # Reduced from 450
-LLM_TRAINING_TIMEOUT = 600  # Reduced from 1200 seconds
+LLM_TRAINING_TIMEOUT = 1800
+CONFIRMATION_TTL_SECONDS = 120.0
+
+CONFIRMATION_REQUIRED_INTENTS = frozenset({
+    "monitor_start",
+    "monitor_stop",
+    "scan_market",
+    "watchlist_remove",
+    "train_gm",
+    "train_llm",
+    "auto_train_gm",
+    "auto_train_llm",
+    "set_interval",
+    "set_forecast",
+    "set_lookback",
+})
+
+INTENT_PERMISSION_MAP: dict[str, str] = {
+    "analyze_stock": "analyze",
+    "refresh_sentiment": "analyze",
+    "watchlist_add": "trade_paper",
+    "watchlist_remove": "trade_paper",
+    "monitor_start": "trade_paper",
+    "monitor_stop": "trade_paper",
+    "scan_market": "trade_paper",
+    "set_interval": "trade_paper",
+    "set_forecast": "trade_paper",
+    "set_lookback": "trade_paper",
+    "train_gm": "configure",
+    "train_llm": "configure",
+    "auto_train_gm": "configure",
+    "auto_train_llm": "configure",
+}
 
 
 # =============================================================================
@@ -127,160 +160,162 @@ class IntentClassifier:
         
     def _register_default_patterns(self) -> None:
         """Register default intent patterns with scores."""
-        # Monitor control intents
-        self._intent_patterns["monitor_start"] = [
-            ("start monitoring", 1.0),
-            ("开启监控", 1.0),
-            ("开始监控", 1.0),
-            ("打开监控", 0.95),
-            ("启动监控", 0.9),
-            ("resume monitoring", 0.9),
-            ("enable monitoring", 0.9),
-            ("watch the market", 0.85),
-            ("盯盘", 0.95),
-            ("监控市场", 0.9),
-        ]
-        
-        self._intent_patterns["monitor_stop"] = [
-            ("stop monitoring", 1.0),
-            ("停止监控", 1.0),
-            ("关闭监控", 1.0),
-            ("pause monitoring", 0.95),
-            ("disable monitoring", 0.9),
-            ("stop monitor", 0.95),
-            ("别监控了", 0.9),
-            ("先别监控", 0.85),
-        ]
-        
-        # Analysis intents
-        self._intent_patterns["analyze_stock"] = [
-            ("analyze", 0.8),
-            ("分析", 0.8),
-            ("look at", 0.75),
-            ("查看", 0.8),
-            ("check", 0.7),
-            ("review", 0.7),
-            ("chart", 0.6),
-            ("图表", 0.6),
-        ]
-        
-        # Watchlist intents
-        self._intent_patterns["watchlist_add"] = [
-            ("add watchlist", 1.0),
-            ("加入自选", 1.0),
-            ("添加自选", 1.0),
-            ("watch this", 0.85),
-            ("follow", 0.8),
-            ("关注", 0.9),
-        ]
-        
-        self._intent_patterns["watchlist_remove"] = [
-            ("remove watchlist", 1.0),
-            ("移除自选", 1.0),
-            ("删除自选", 1.0),
-            ("unfollow", 0.9),
-            ("stop watching", 0.85),
-        ]
-        
-        # Training intents
-        self._intent_patterns["train_gm"] = [
-            ("train gm", 1.0),
-            ("训练 gm", 1.0),
-            ("训练模型", 0.9),
-            ("train model", 0.95),
-        ]
-        
-        self._intent_patterns["train_llm"] = [
-            ("train llm", 1.0),
-            ("训练 llm", 1.0),
-            ("训练大模型", 1.0),
-            ("train chat model", 0.95),
-        ]
-        
-        self._intent_patterns["auto_train_gm"] = [
-            ("auto train gm", 1.0),
-            ("自动训练 gm", 1.0),
-            ("auto learn", 0.9),
-            ("继续学习", 0.85),
-        ]
-        
-        self._intent_patterns["auto_train_llm"] = [
-            ("auto train llm", 1.0),
-            ("自动训练 llm", 1.0),
-            ("自动训练大模型", 1.0),
-        ]
-        
-        # Market scan intents
-        self._intent_patterns["scan_market"] = [
-            ("scan market", 1.0),
-            ("扫描市场", 1.0),
-            ("scan for signal", 0.95),
-            ("find opportunity", 0.9),
-            ("扫市场", 1.0),
-            ("全市场扫描", 0.95),
-        ]
-        
-        # Sentiment refresh intents
-        self._intent_patterns["refresh_sentiment"] = [
-            ("refresh sentiment", 1.0),
-            ("刷新情绪", 1.0),
-            ("refresh news", 0.95),
-            ("刷新新闻", 1.0),
-            ("update sentiment", 0.9),
-            ("更新情绪", 0.95),
-        ]
-        
-        # Interval change intents
-        self._intent_patterns["set_interval"] = [
-            ("set interval", 1.0),
-            ("周期", 1.0),
-            ("timeframe", 0.95),
-            ("switch to", 0.9),
-            ("切换到", 1.0),
-            ("改成", 0.9),
-            ("换成", 0.9),
-        ]
-        
-        # Status query intents
-        self._intent_patterns["status_query"] = [
-            ("status", 1.0),
-            ("当前状态", 1.0),
-            ("current state", 1.0),
-            ("what are you monitoring", 0.95),
-            ("current settings", 0.9),
-            ("参数状态", 0.95),
-        ]
-        
-        # Greeting intents
-        self._intent_patterns["greeting"] = [
-            ("hi", 1.0),
-            ("hello", 1.0),
-            ("hey", 1.0),
-            ("你好", 1.0),
-            ("您好", 1.0),
-            ("嗨", 1.0),
-        ]
-        
-        # Help intents
-        self._intent_patterns["help"] = [
-            ("help", 1.0),
-            ("help", 1.0),
-            ("commands", 0.95),
-            ("命令", 1.0),
-            ("帮助", 1.0),
-            ("幫助", 1.0),
-        ]
-        
-        # Capability query intents
-        self._intent_patterns["capability_query"] = [
-            ("what can you do", 1.0),
-            ("你能做什么", 1.0),
-            ("capability", 0.95),
-            ("how can you help", 0.95),
-            ("可以做什么", 1.0),
-            ("怎么控制", 0.9),
-        ]
-    
+        self._intent_patterns = {
+            "monitor_start": [
+                ("start monitoring", 1.0),
+                ("start monitor", 1.0),
+                ("enable monitoring", 0.9),
+                ("resume monitoring", 0.9),
+                ("watch the market", 0.85),
+                ("\u5f00\u59cb\u76d1\u63a7", 1.0),
+                ("\u5f00\u542f\u76d1\u63a7", 1.0),
+                ("\u6253\u5f00\u76d1\u63a7", 0.95),
+                ("\u7ee7\u7eed\u76d1\u63a7", 0.9),
+                ("\u76ef\u76d8", 0.9),
+            ],
+            "monitor_stop": [
+                ("stop monitoring", 1.0),
+                ("stop monitor", 1.0),
+                ("pause monitoring", 0.95),
+                ("disable monitoring", 0.9),
+                ("\u505c\u6b62\u76d1\u63a7", 1.0),
+                ("\u5173\u95ed\u76d1\u63a7", 1.0),
+                ("\u6682\u505c\u76d1\u63a7", 0.95),
+                ("\u53d6\u6d88\u76d1\u63a7", 0.9),
+            ],
+            "analyze_stock": [
+                ("analyze", 0.85),
+                ("analysis", 0.85),
+                ("look at", 0.75),
+                ("check", 0.7),
+                ("review", 0.7),
+                ("chart", 0.65),
+                ("\u5206\u6790", 0.9),
+                ("\u67e5\u770b", 0.85),
+                ("\u56fe\u8868", 0.75),
+            ],
+            "watchlist_add": [
+                ("add watchlist", 1.0),
+                ("add to watchlist", 1.0),
+                ("watch this", 0.85),
+                ("follow", 0.8),
+                ("\u52a0\u5165\u81ea\u9009", 1.0),
+                ("\u6dfb\u52a0\u81ea\u9009", 1.0),
+                ("\u5173\u6ce8", 0.9),
+            ],
+            "watchlist_remove": [
+                ("remove watchlist", 1.0),
+                ("remove from watchlist", 1.0),
+                ("unfollow", 0.9),
+                ("stop watching", 0.85),
+                ("\u79fb\u9664\u81ea\u9009", 1.0),
+                ("\u5220\u9664\u81ea\u9009", 1.0),
+                ("\u53d6\u6d88\u5173\u6ce8", 0.9),
+            ],
+            "train_gm": [
+                ("train gm", 1.0),
+                ("train model", 0.95),
+                ("\u8bad\u7ec3 gm", 1.0),
+                ("\u8bad\u7ec3\u6a21\u578b", 0.9),
+            ],
+            "train_llm": [
+                ("train llm", 1.0),
+                ("train chat model", 0.95),
+                ("fine tune llm", 0.9),
+                ("\u8bad\u7ec3 llm", 1.0),
+                ("\u8bad\u7ec3\u804a\u5929\u6a21\u578b", 1.0),
+                ("\u5fae\u8c03 llm", 0.9),
+            ],
+            "auto_train_gm": [
+                ("auto train gm", 1.0),
+                ("auto learn", 0.9),
+                ("\u81ea\u52a8\u8bad\u7ec3 gm", 1.0),
+                ("\u7ee7\u7eed\u5b66\u4e60", 0.85),
+            ],
+            "auto_train_llm": [
+                ("auto train llm", 1.0),
+                ("auto llm", 0.9),
+                ("train llm automatically", 0.9),
+                ("\u81ea\u52a8\u8bad\u7ec3 llm", 1.0),
+                ("\u81ea\u52a8\u8bad\u7ec3\u804a\u5929\u6a21\u578b", 1.0),
+            ],
+            "scan_market": [
+                ("scan market", 1.0),
+                ("scan for signal", 0.95),
+                ("find opportunity", 0.9),
+                ("\u626b\u63cf\u5e02\u573a", 1.0),
+                ("\u626b\u5e02\u573a", 0.95),
+                ("\u627e\u673a\u4f1a", 0.9),
+            ],
+            "refresh_sentiment": [
+                ("refresh sentiment", 1.0),
+                ("refresh news", 0.95),
+                ("update sentiment", 0.9),
+                ("\u5237\u65b0\u60c5\u7eea", 1.0),
+                ("\u5237\u65b0\u65b0\u95fb", 1.0),
+                ("\u5237\u65b0\u653f\u7b56", 0.95),
+                ("\u66f4\u65b0\u60c5\u7eea", 0.95),
+            ],
+            "set_interval": [
+                ("set interval", 1.0),
+                ("timeframe", 0.95),
+                ("switch to", 0.9),
+                ("interval", 0.85),
+                ("\u5468\u671f", 1.0),
+                ("\u65f6\u95f4\u6846\u67b6", 0.95),
+                ("\u5207\u6362\u5230", 0.95),
+            ],
+            "set_forecast": [
+                ("set forecast", 1.0),
+                ("forecast bars", 0.95),
+                ("prediction bars", 0.95),
+                ("horizon", 0.8),
+                ("\u8bbe\u7f6e\u9884\u6d4b", 1.0),
+                ("\u9884\u6d4b\u6b65\u6570", 0.95),
+                ("\u524d\u77bb", 0.9),
+            ],
+            "set_lookback": [
+                ("set lookback", 1.0),
+                ("lookback", 0.95),
+                ("history window", 0.9),
+                ("history length", 0.9),
+                ("\u8bbe\u7f6e\u56de\u770b", 1.0),
+                ("\u56de\u770b", 0.95),
+                ("\u56de\u6eaf", 0.95),
+                ("\u5386\u53f2\u7a97\u53e3", 0.9),
+            ],
+            "status_query": [
+                ("status", 1.0),
+                ("current state", 1.0),
+                ("what are you monitoring", 0.95),
+                ("current settings", 0.9),
+                ("\u5f53\u524d\u72b6\u6001", 1.0),
+                ("\u73b0\u5728\u72b6\u6001", 0.95),
+                ("\u53c2\u6570\u72b6\u6001", 0.9),
+            ],
+            "greeting": [
+                ("hi", 1.0),
+                ("hello", 1.0),
+                ("hey", 1.0),
+                ("\u4f60\u597d", 1.0),
+                ("\u60a8\u597d", 1.0),
+            ],
+            "help": [
+                ("help", 1.0),
+                ("commands", 0.95),
+                ("\u5e2e\u52a9", 1.0),
+                ("\u547d\u4ee4", 0.9),
+            ],
+            "capability_query": [
+                ("what can you do", 1.0),
+                ("capability", 0.95),
+                ("how can you help", 0.95),
+                ("\u4f60\u80fd\u505a\u4ec0\u4e48", 1.0),
+                ("\u53ef\u4ee5\u505a\u4ec0\u4e48", 1.0),
+                ("\u600e\u4e48\u63a7\u5236", 0.9),
+                ("\u5982\u4f55\u63a7\u5236", 0.9),
+            ],
+        }
     def _levenshtein_distance(self, s1: str, s2: str) -> int:
         """Calculate Levenshtein distance between two strings."""
         if len(s1) < len(s2):
@@ -359,47 +394,55 @@ class IntentClassifier:
     
     def _extract_entities(self, text: str, intent: str) -> dict[str, Any]:
         """Extract entities from text based on intent."""
-        entities = {}
-        
+        _ = intent
+        entities: dict[str, Any] = {}
+
         # Stock code extraction (6-digit codes)
-        stock_match = re.search(r'\b(\d{6})\b', text)
+        stock_match = re.search(r"\b(\d{6})\b", text)
         if stock_match:
-            entities['stock_code'] = stock_match.group(1)
-        
+            entities["stock_code"] = stock_match.group(1)
+
         # Interval extraction
-        interval_match = re.search(r'\b(1m|5m|15m|30m|60m|1d|\d+\s*(m|min|分钟|h|hour|日|天))\b', text.lower())
+        interval_match = re.search(
+            r"\b(1m|5m|15m|30m|60m|1d|\d+\s*(m|min|mins|minute|minutes|h|hour|hours|d|day|days))\b",
+            text.lower(),
+        )
+        if not interval_match:
+            interval_match = re.search(
+                r"(\d+)\s*(?:\u5206\u949f|\u5206|\u5c0f\u65f6|\u5929|\u65e5)",
+                text,
+            )
         if interval_match:
-            entities['interval'] = self._normalize_interval(interval_match.group(1))
-        
+            entities["interval"] = self._normalize_interval(interval_match.group(1))
+
         # Number extraction for forecast/lookback
-        number_match = re.search(r'(\d+)', text)
+        number_match = re.search(r"(\d+)", text)
         if number_match:
-            entities['number'] = int(number_match.group(1))
-        
+            entities["number"] = int(number_match.group(1))
+
         return entities
-    
+
     def _normalize_interval(self, interval: str) -> str:
         """Normalize interval string to standard format."""
         interval = interval.lower().strip()
-        
-        # Handle Chinese
-        if '分钟' in interval:
-            num = re.search(r'(\d+)', interval)
+
+        # Handle Chinese and word variants
+        if any(tok in interval for tok in ("\u5206\u949f", "\u5206", "min", "minute")):
+            num = re.search(r"(\d+)", interval)
             return f"{num.group(1)}m" if num else "1m"
-        
-        # Handle variations
-        if interval in ('h', 'hour', '小时'):
-            return "1h"
-        if interval in ('日', '天', 'daily', 'day'):
+        if any(tok in interval for tok in ("\u5c0f\u65f6", "hour")) or interval == "h":
+            num = re.search(r"(\d+)", interval)
+            hours = int(num.group(1)) if num else 1
+            return f"{max(1, hours) * 60}m"
+        if interval in ("d", "day", "days", "daily", "\u65e5", "\u5929"):
             return "1d"
-        
-        # Handle minute variations
-        num = re.search(r'(\d+)', interval)
+
+        # Handle numeric minute fallback
+        num = re.search(r"(\d+)", interval)
         if num:
             return f"{num.group(1)}m"
-        
-        return interval
 
+        return interval
 
 # =============================================================================
 # LONG-TERM MEMORY SYSTEM
@@ -711,13 +754,13 @@ class AsyncQueryProcessor:
             def on_done(result: Any) -> None:
                 with self._lock:
                     self._active_workers.pop(query_id, None)
-                    self._process_queue()
+                    self._process_queue_locked()
                 done_fn(result)
             
             def on_error(err: str) -> None:
                 with self._lock:
                     self._active_workers.pop(query_id, None)
-                    self._process_queue()
+                    self._process_queue_locked()
                 error_fn(err)
             
             worker.result.connect(on_done)
@@ -734,9 +777,16 @@ class AsyncQueryProcessor:
     def _process_queue(self) -> None:
         """Process queued queries."""
         with self._lock:
-            while self._queue and len(self._active_workers) < self._max_concurrent:
-                query_id, work_fn, done_fn, error_fn = self._queue.popleft()
-                self._start_worker(query_id, work_fn, done_fn, error_fn)
+            self._process_queue_locked()
+
+    def _process_queue_locked(self) -> None:
+        """Process queued queries.
+
+        Caller must hold ``self._lock``.
+        """
+        while self._queue and len(self._active_workers) < self._max_concurrent:
+            query_id, work_fn, done_fn, error_fn = self._queue.popleft()
+            self._start_worker(query_id, work_fn, done_fn, error_fn)
     
     def cancel(self, query_id: str) -> None:
         """Cancel a queued or running query."""
@@ -882,6 +932,198 @@ _command_registry = CommandRegistry()
 _sentiment_cache = SentimentCache()
 
 
+def _confirmation_decision(text: str) -> str | None:
+    t = str(text or "").strip().lower()
+    if not t:
+        return None
+    yes_tokens = {
+        "yes",
+        "y",
+        "confirm",
+        "ok",
+        "sure",
+        "\u7ee7\u7eed",
+        "\u786e\u8ba4",
+        "\u662f",
+        "\u597d\u7684",
+    }
+    no_tokens = {
+        "no",
+        "n",
+        "cancel",
+        "abort",
+        "stop",
+        "\u53d6\u6d88",
+        "\u5426",
+        "\u4e0d\u8981",
+    }
+    if t in yes_tokens:
+        return "confirm"
+    if t in no_tokens:
+        return "cancel"
+    return None
+
+
+def _pending_confirmation(self: Any) -> dict[str, Any] | None:
+    pending = getattr(self, "_chat_pending_confirmation", None)
+    if not isinstance(pending, dict):
+        return None
+    expires_at = float(pending.get("expires_at", 0.0) or 0.0)
+    if expires_at > 0.0 and time.time() > expires_at:
+        setattr(self, "_chat_pending_confirmation", None)
+        return None
+    return pending
+
+
+def _action_label(intent: str, entities: dict[str, Any], action_text: str = "") -> str:
+    text = str(action_text or "").strip()
+    if text:
+        return text
+    if intent == "set_interval":
+        tok = str(entities.get("interval", "") or "").strip()
+        return f"set interval {tok}" if tok else "set interval"
+    if intent == "set_forecast":
+        n = entities.get("number")
+        return f"set forecast {n}" if n is not None else "set forecast"
+    if intent == "set_lookback":
+        n = entities.get("number")
+        return f"set lookback {n}" if n is not None else "set lookback"
+    if intent in {"analyze_stock", "watchlist_add", "watchlist_remove"}:
+        code = str(entities.get("stock_code", "") or "").strip()
+        return f"{intent} {code}".strip()
+    return intent
+
+
+def _authorize_chat_intent(self: Any, intent: str) -> tuple[bool, str]:
+    permission = str(INTENT_PERMISSION_MAP.get(intent, "") or "").strip()
+    if not permission:
+        return True, ""
+
+    try:
+        from utils.security import get_access_control, get_audit_log
+    except Exception:
+        return False, "Authorization subsystem unavailable; action blocked."
+
+    try:
+        ac = get_access_control()
+        _sync_access_identity(self, ac)
+        allowed = bool(ac.check(permission))
+        role = str(getattr(ac, "current_role", "unknown") or "unknown")
+    except Exception as exc:
+        return False, f"Authorization check failed: {exc}"
+
+    try:
+        audit = get_audit_log()
+        if audit is not None:
+            audit.log_access(f"chat_intent:{intent}", permission, allowed)
+    except Exception:
+        pass
+
+    if allowed:
+        return True, ""
+    return (
+        False,
+        (
+            f"Access denied for '{intent}'. Required permission='{permission}' "
+            f"(current role='{role}')."
+        ),
+    )
+
+
+def _sync_access_identity(self: Any, ac: Any) -> None:
+    """Best-effort runtime role/user binding for chat authorization."""
+    try:
+        mode = getattr(CONFIG, "trading_mode", TradingMode.SIMULATION)
+        mode_value = str(getattr(mode, "value", mode) or "").strip().lower()
+    except Exception:
+        mode_value = "simulation"
+
+    desired_role = "live_trader" if mode_value == "live" else "trader"
+    try:
+        current_role = str(getattr(ac, "current_role", "") or "").strip()
+        if current_role and current_role != desired_role:
+            ac.set_role(desired_role)
+    except Exception:
+        pass
+
+    desired_user = (
+        str(os.getenv("TRADING_USER", "") or "").strip()
+        or str(os.getenv("USERNAME", "") or "").strip()
+        or str(os.getenv("USER", "") or "").strip()
+        or "desktop_user"
+    )
+    try:
+        current_user = str(getattr(ac, "_current_user", "") or "").strip()
+        if desired_user and current_user != desired_user:
+            ac.set_user(desired_user)
+    except Exception:
+        pass
+
+
+def _queue_confirmation(
+    self: Any,
+    intent_match: IntentMatch,
+    *,
+    action_text: str = "",
+) -> tuple[bool, str]:
+    label = _action_label(intent_match.intent, intent_match.entities, action_text)
+    setattr(
+        self,
+        "_chat_pending_confirmation",
+        {
+            "intent": str(intent_match.intent),
+            "entities": dict(intent_match.entities or {}),
+            "confidence": float(intent_match.confidence or 0.0),
+            "action_text": str(action_text or ""),
+            "created_at": float(time.time()),
+            "expires_at": float(time.time() + CONFIRMATION_TTL_SECONDS),
+        },
+    )
+    return (
+        True,
+        (
+            f"Confirm action: {label}.\n"
+            "Reply 'yes' or 'confirm' to proceed, 'cancel' to abort."
+        ),
+    )
+
+
+def _handle_pending_confirmation(self: Any, text: str) -> tuple[bool, str]:
+    pending = _pending_confirmation(self)
+    if pending is None:
+        return False, ""
+
+    decision = _confirmation_decision(text)
+    if decision is None:
+        return True, "Pending action requires confirmation. Reply 'yes' or 'cancel'."
+
+    if decision == "cancel":
+        setattr(self, "_chat_pending_confirmation", None)
+        return True, "Action cancelled."
+
+    intent = str(pending.get("intent", "unknown") or "unknown")
+    entities = dict(pending.get("entities") or {})
+    confidence = float(pending.get("confidence", 0.0) or 0.0)
+    action_text = str(pending.get("action_text", "") or "")
+    setattr(self, "_chat_pending_confirmation", None)
+    intent_match = IntentMatch(
+        intent=intent,
+        confidence=confidence,
+        command=(intent if intent != "unknown" else None),
+        entities=entities,
+        raw_score=confidence,
+    )
+    handled, reply = _execute_ai_chat_command_enhanced(
+        self,
+        intent_match,
+        action_override=action_text,
+        confirmed=True,
+    )
+    if handled:
+        return True, reply
+    return True, f"Confirmed action '{_action_label(intent, entities, action_text)}' could not be executed."
+
+
 def _append_ai_chat_message(
     self: Any,
     sender: str,
@@ -915,6 +1157,10 @@ def _append_ai_chat_message(
     show_in_panel = (
         str(role or "").strip().lower() == "assistant"
         or str(sender or "").strip().lower() in {"ai", "assistant"}
+        or (
+            str(role or "").strip().lower() == "system"
+            and str(level or "").strip().lower() in {"warning", "error", "success"}
+        )
     )
 
     if show_in_panel:
@@ -941,9 +1187,6 @@ def _append_ai_chat_message(
         importance = 1.5 if "trade" in message.lower() or "buy" in message.lower() or "sell" in message.lower() else 1.0
         _long_term_memory.add_memory(message, importance=importance)
 
-    if len(_chat_history._messages) > 250:
-        del _chat_history._messages[0]
-
     if show_in_panel:
         try:
             sb = widget.verticalScrollBar()
@@ -962,6 +1205,13 @@ def _on_ai_chat_send(self: Any) -> None:
     if not text:
         return
     inp.clear()
+
+    # Resolve pending confirmation before normal intent routing.
+    handled_confirm, confirm_reply = _handle_pending_confirmation(self, text)
+    if handled_confirm:
+        self._append_ai_chat_message("You", text, role="user", intent="confirmation_reply")
+        self._append_ai_chat_message("AI", confirm_reply, role="assistant", intent="confirmation_reply")
+        return
 
     # Classify intent first
     intent_match = _intent_classifier.classify(text)
@@ -1006,7 +1256,10 @@ def _on_ai_chat_send(self: Any) -> None:
     history = _chat_history.get_context_for_query(text, limit=15)
 
     # Refresh sentiment with cache
-    if any(tok in str(text).lower() for tok in ("news", "policy", "sentiment", "新闻", "政策", "情绪")) and symbol:
+    if any(
+        tok in str(text).lower()
+        for tok in ("news", "policy", "sentiment", "\u65b0\u95fb", "\u653f\u7b56", "\u60c5\u7eea")
+    ) and symbol:
         try:
             cached = _sentiment_cache.get(symbol)
             if not cached:
@@ -1017,7 +1270,12 @@ def _on_ai_chat_send(self: Any) -> None:
     # Generate unique query ID
     query_id = hashlib.md5(f"{text}{time.time()}".encode()).hexdigest()[:16]
 
-    self._append_ai_chat_message("System", "AI is searching the internet and thinking...", role="system", level="info")
+    self._append_ai_chat_message(
+        "System",
+        "AI is thinking with local model context...",
+        role="system",
+        level="info",
+    )
 
     def _work() -> dict[str, Any]:
         return _generate_ai_chat_reply_enhanced(
@@ -1031,6 +1289,7 @@ def _on_ai_chat_send(self: Any) -> None:
         )
 
     def _on_done(payload: Any) -> None:
+        setattr(self, "_ai_retry_count", 0)
         if not isinstance(payload, dict):
             self._append_ai_chat_message("System", "AI reply failed (invalid payload).", role="system", level="error")
             return
@@ -1077,7 +1336,14 @@ def _on_ai_chat_send(self: Any) -> None:
             setattr(self, '_ai_retry_count', 0)
 
     # Submit to async processor
-    _query_processor.submit(query_id, _work, _on_done, _on_error)
+    queued = _query_processor.submit(query_id, _work, _on_done, _on_error)
+    if not queued:
+        self._append_ai_chat_message(
+            "System",
+            "Failed to queue AI request.",
+            role="system",
+            level="error",
+        )
 
 
 def _on_ai_chat_send_retry(self: Any, text: str) -> None:
@@ -1092,34 +1358,54 @@ def _on_ai_chat_send_retry(self: Any, text: str) -> None:
 def _execute_ai_chat_command_enhanced(
     self: Any,
     intent_match: IntentMatch,
-    action_override: str | None = None
+    action_override: str | None = None,
+    confirmed: bool = False,
 ) -> tuple[bool, str]:
     """Enhanced command execution with safety controls."""
-    
-    intent = intent_match.intent
-    entities = intent_match.entities
-    confidence = intent_match.confidence
-    
-    # Check for safety-critical actions
-    safety_critical_intents = {
-        "train_gm", "train_llm", "auto_train_gm", "auto_train_llm",
-        "monitor_start", "scan_market"
-    }
-    
-    # Require confirmation for safety-critical actions if confidence is low
-    if intent in safety_critical_intents and confidence < 0.9:
-        # For now, proceed but log - full confirmation dialog would go here
-        log.info(f"Safety-critical action '{intent}' executed with confidence {confidence}")
-    
-    low = intent  # Use classified intent
-    
+    intent = str(intent_match.intent or "unknown").strip()
+    entities = dict(intent_match.entities or {})
+    confidence = float(intent_match.confidence or 0.0)
+    raw_action_text = str(action_override or "").strip()
+
+    # If an override action is provided by the model, classify and execute that action.
+    if raw_action_text:
+        parsed = _intent_classifier.classify(raw_action_text)
+        if parsed.intent != "unknown":
+            intent = str(parsed.intent)
+            entities = dict(parsed.entities or {})
+            confidence = float(parsed.confidence or 0.0)
+        else:
+            # Fall back to raw text for weak matching checks.
+            intent = raw_action_text.lower()
+
+    low = str(intent or "").strip().lower()
+
+    # Intent-level authorization.
+    allowed, denial = _authorize_chat_intent(self, low)
+    if not allowed:
+        return True, denial
+
+    # Confirmation gate for potentially risky actions.
+    if (not confirmed) and low in CONFIRMATION_REQUIRED_INTENTS:
+        return _queue_confirmation(
+            self,
+            IntentMatch(
+                intent=low,
+                confidence=confidence,
+                command=low if low != "unknown" else None,
+                entities=entities,
+                raw_score=confidence,
+            ),
+            action_text=raw_action_text,
+        )
+
     # Greeting
     if low == "greeting":
         return True, (
             "Hi. You can chat naturally and also control the app in plain language. "
             + _chat_state_summary_enhanced(self)
         )
-    
+
     # Help
     if low == "help":
         return True, (
@@ -1128,9 +1414,11 @@ def _execute_ai_chat_command_enhanced(
             "scan market, refresh sentiment, set interval <1m|5m|15m|30m|60m|1d>, "
             "set forecast <bars>, set lookback <bars>, add/remove watchlist <code>, "
             "train gm/llm, auto train gm/llm. "
-            "Chinese: 分析 <代码> / 开始监控 / 停止监控 / 刷新情绪 / 周期 5m。"
+            "Chinese: \u5206\u6790 <\u4ee3\u7801> / "
+            "\u5f00\u59cb\u76d1\u63a7 / \u505c\u6b62\u76d1\u63a7 / "
+            "\u5237\u65b0\u60c5\u7eea / \u5468\u671f 5m."
         )
-    
+
     # Capability query
     if low == "capability_query":
         return True, (
@@ -1138,27 +1426,27 @@ def _execute_ai_chat_command_enhanced(
             "Examples: 'analyze 600519', 'watch this stock', 'switch to 15 minutes', "
             "'set forecast to 45', 'refresh sentiment', 'scan market'."
         )
-    
+
     # Status query
     if low == "status_query":
         return True, _chat_state_summary_enhanced(self)
-    
+
     # Monitor control
     if low == "monitor_stop":
         self.monitor_action.setChecked(False)
         self._stop_monitoring()
         return True, "Monitoring stopped."
-    
+
     if low == "monitor_start":
         self.monitor_action.setChecked(True)
         self._start_monitoring()
         return True, "Monitoring started."
-    
+
     # Market scan
     if low == "scan_market":
         self._scan_stocks()
         return True, "Market scan started."
-    
+
     # Sentiment refresh
     if low == "refresh_sentiment":
         self._refresh_sentiment()
@@ -1166,58 +1454,58 @@ def _execute_ai_chat_command_enhanced(
         if symbol:
             self._refresh_news_policy_signal(symbol, force=True)
         return True, "Sentiment refresh started."
-    
+
     # Interval change
     if low == "set_interval":
-        token = entities.get('interval', '')
+        token = entities.get("interval", "")
         if not token:
             return True, "Please specify an interval (1m, 5m, 15m, 30m, 60m, 1d)."
-        allowed = {"1m", "5m", "15m", "30m", "60m", "1d"}
-        if token not in allowed:
+        allowed_tokens = {"1m", "5m", "15m", "30m", "60m", "1d"}
+        if token not in allowed_tokens:
             return True, f"Unsupported interval '{token}'."
         self.interval_combo.setCurrentText(token)
         return True, f"Interval set to {token}."
-    
+
     # Forecast setting
-    if "forecast" in low:
-        bars = entities.get('number')
-        if not bars:
+    if low == "set_forecast":
+        bars = entities.get("number")
+        if bars is None:
             return True, "Missing forecast bars value."
-        bars = max(int(self.forecast_spin.minimum()), min(int(self.forecast_spin.maximum()), bars))
+        bars = max(int(self.forecast_spin.minimum()), min(int(self.forecast_spin.maximum()), int(bars)))
         self.forecast_spin.setValue(bars)
         return True, f"Forecast set to {bars} bars."
-    
+
     # Lookback setting
-    if "lookback" in low:
-        bars = entities.get('number')
-        if not bars:
+    if low == "set_lookback":
+        bars = entities.get("number")
+        if bars is None:
             return True, "Missing lookback bars value."
-        bars = max(int(self.lookback_spin.minimum()), min(int(self.lookback_spin.maximum()), bars))
+        bars = max(int(self.lookback_spin.minimum()), min(int(self.lookback_spin.maximum()), int(bars)))
         self.lookback_spin.setValue(bars)
         return True, f"Lookback set to {bars} bars."
-    
+
     # Stock analysis
     if low == "analyze_stock":
-        code = entities.get('stock_code') or self._ui_norm(self.stock_input.text())
+        code = entities.get("stock_code") or self._ui_norm(self.stock_input.text())
         if not code:
             return True, "Please specify a stock code."
         self.stock_input.setText(code)
         self._analyze_stock()
         self._refresh_news_policy_signal(code, force=False)
         return True, f"Analyzing {code}."
-    
+
     # Watchlist add
     if low == "watchlist_add":
-        code = entities.get('stock_code') or self._ui_norm(self.stock_input.text())
+        code = entities.get("stock_code") or self._ui_norm(self.stock_input.text())
         if not code:
             return True, "Please specify a stock code."
         self.stock_input.setText(code)
         self._add_to_watchlist()
         return True, f"Added {code} to watchlist."
-    
+
     # Watchlist remove
     if low == "watchlist_remove":
-        code = entities.get('stock_code')
+        code = entities.get("stock_code")
         if not code:
             return True, "Please specify a stock code."
         row = self._watchlist_row_by_code.get(code)
@@ -1226,25 +1514,25 @@ def _execute_ai_chat_command_enhanced(
             self._remove_from_watchlist()
             return True, f"Removed {code} from watchlist."
         return True, f"{code} is not in watchlist."
-    
+
     # Training commands
     if low == "auto_train_gm":
         if hasattr(self, "_show_auto_learn"):
             self._show_auto_learn(auto_start=True)
         return True, "Auto Train GM panel opened and training started."
-    
+
     if low == "auto_train_llm":
         self._auto_train_llm()
         return True, "Auto Train LLM panel opened."
-    
+
     if low == "train_llm":
         self._start_llm_training()
         return True, "LLM training started."
-    
+
     if low == "train_gm":
         self._start_training()
         return True, "Train GM dialog opened."
-    
+
     return False, ""
 
 
@@ -1300,7 +1588,7 @@ def _generate_ai_chat_reply_enhanced(
         return {
             "answer": str(payload.get("answer", "") or "").strip(),
             "action": str(payload.get("action", "") or "").strip(),
-            "local_model_ready": True,  # Self-trained model
+            "local_model_ready": bool(payload.get("local_model_ready", False)),
         }
     except Exception as exc:
         log.warning("Self-trained LLM chat failed: %s", exc)
@@ -1354,8 +1642,8 @@ def _start_llm_training_enhanced(self: Any) -> None:
         collector = get_collector()
         chat_report = analyzer.train_chat_model(
             chat_history_path="data/chat_history/chat_history.json",
-            max_steps=800,
-            epochs=1,
+            max_steps=1800,
+            epochs=2,
         )
         
         # Reduced article count for faster training
@@ -1561,58 +1849,78 @@ def _build_ai_chat_response_enhanced(
 # Alias for compatibility
 _build_ai_chat_response = _build_ai_chat_response_enhanced
 
-# Auto-training functions (use original from app_ai_ops if not defined)
-# These will be imported from original module if needed
+# Auto-training functions
 def _auto_train_llm(self: Any) -> None:
-    """Open auto train LLM dialog (compatibility wrapper)."""
-    # Delegate to original implementation if available
-    try:
-        from ui import app_ai_ops as _original
-        if hasattr(_original, '_auto_train_llm'):
-            _original._auto_train_llm(self)
-            return
-    except _UI_AI_RECOVERABLE_EXCEPTIONS:
-        log.debug("Original _auto_train_llm not available")
-    # Fallback path
+    """Open Auto Train LLM control panel (non-modal)."""
     if hasattr(self, "_show_llm_train_dialog"):
         dialog = self._show_llm_train_dialog(auto_start=False)
         if dialog is None and hasattr(self, "log"):
             self.log("Auto Train LLM dialog not available.", "error")
+        elif hasattr(self, "log"):
+            self.log("Auto Train LLM panel opened.", "info")
 
 def _show_llm_train_dialog(self: Any, auto_start: bool = False) -> Any | None:
-    """Show LLM train dialog (compatibility wrapper)."""
+    """Show LLM train dialog."""
     try:
-        from ui import app_ai_ops as _original
-        if hasattr(_original, '_show_llm_train_dialog'):
-            return _original._show_llm_train_dialog(self, auto_start=bool(auto_start))
-    except _UI_AI_RECOVERABLE_EXCEPTIONS:
-        log.debug("Original _show_llm_train_dialog not available")
-    return None
+        from .llm_train_dialog import LLMTrainDialog
+    except ImportError as exc:
+        if hasattr(self, "log"):
+            self.log(f"Auto Train LLM dialog not available: {exc}", "error")
+        return None
+
+    dialog = getattr(self, "_llm_train_dialog", None)
+    if dialog is None:
+        dialog = LLMTrainDialog(self)
+        self._llm_train_dialog = dialog
+
+        def _on_destroyed(*_args: object) -> None:
+            self._llm_train_dialog = None
+
+        if hasattr(dialog, "session_finished"):
+            dialog.session_finished.connect(self._on_llm_training_session_finished)
+        dialog.destroyed.connect(_on_destroyed)
+
+    dialog.setModal(False)
+    dialog.show()
+    dialog.raise_()
+    dialog.activateWindow()
+    try:
+        from PyQt6.QtCore import Qt
+
+        dialog.setWindowState(
+            (dialog.windowState() & ~Qt.WindowState.WindowMinimized)
+            | Qt.WindowState.WindowActive
+        )
+    except Exception:
+        pass
+    if auto_start and hasattr(dialog, "start_or_resume_auto_train"):
+        dialog.start_or_resume_auto_train()
+    return dialog
 
 def _on_llm_training_session_finished(self: Any, payload: dict[str, Any]) -> None:
-    """Handle LLM training session finished (compatibility wrapper)."""
-    try:
-        from ui import app_ai_ops as _original
-        if hasattr(_original, "_on_llm_training_session_finished"):
-            _original._on_llm_training_session_finished(self, payload)
-            return
-    except _UI_AI_RECOVERABLE_EXCEPTIONS:
-        pass
+    """Handle LLM training session completion."""
+    data = dict(payload or {})
+    status = str(data.get("status", "unknown") or "unknown").strip().lower()
+    if status in {"ok", "trained", "complete"} and hasattr(self, "log"):
+        self.log(
+            (
+                "Auto Train LLM completed: "
+                f"collected={data.get('collected_articles', 0)}, "
+                f"trained={data.get('trained_samples', 0)}, "
+                f"arch={data.get('training_architecture', 'hybrid_neural_network')}"
+            ),
+            "success",
+        )
+    elif status == "stopped" and hasattr(self, "log"):
+        self.log("Auto Train LLM stopped by user.", "warning")
+    elif status in {"error", "failed"} and hasattr(self, "log"):
+        self.log(f"Auto Train LLM failed: {data.get('error', 'unknown error')}", "error")
+
     if hasattr(self, "_refresh_model_training_statuses"):
         self._refresh_model_training_statuses()
 
 def _refresh_model_training_statuses(self: Any) -> None:
     """Refresh both GM and LLM status labels shown in the left AI panel."""
-    # Import from original if available, otherwise use basic implementation
-    try:
-        from ui import app_ai_ops as _original
-        if hasattr(_original, '_refresh_model_training_statuses'):
-            _original._refresh_model_training_statuses(self)
-            return
-    except _UI_AI_RECOVERABLE_EXCEPTIONS:
-        pass
-    
-    # Basic implementation
     llm_status_widget = getattr(self, "llm_status", None)
     llm_info_widget = getattr(self, "llm_info", None)
     if llm_status_widget is None or llm_info_widget is None:
@@ -1628,6 +1936,10 @@ def _refresh_model_training_statuses(self: Any) -> None:
         return
 
     status = str(status_payload.get("status", "not_trained") or "not_trained").strip().lower()
+    architecture = str(
+        status_payload.get("training_architecture", "hybrid_neural_network")
+        or "hybrid_neural_network"
+    )
     trained_samples = int(status_payload.get("trained_samples", 0) or 0)
     finished_at = str(
         status_payload.get("finished_at", status_payload.get("saved_at", "")) or ""
@@ -1637,19 +1949,25 @@ def _refresh_model_training_statuses(self: Any) -> None:
     if status in {"trained", "complete", "ok"}:
         llm_status_widget.setText("LLM Model: Trained")
         llm_status_widget.setStyleSheet("color: #35b57c; font-weight: 700;")
-        llm_info_widget.setText(
-            f"Samples: {trained_samples}, Finished: {finished_short}"
-        )
     elif status in {"partial"}:
         llm_status_widget.setText("LLM Model: Partially Trained")
         llm_status_widget.setStyleSheet("color: #d8a03a; font-weight: 700;")
-        llm_info_widget.setText(
-            f"Samples: {trained_samples}, Finished: {finished_short}"
-        )
+    elif status in {"stopped"}:
+        llm_status_widget.setText("LLM Model: Stopped")
+        llm_status_widget.setStyleSheet("color: #d8a03a; font-weight: 700;")
+    elif status in {"error", "failed"}:
+        llm_status_widget.setText("LLM Model: Error")
+        llm_status_widget.setStyleSheet("color: #e5534b; font-weight: 700;")
     else:
         llm_status_widget.setText("LLM Model: Not trained")
-        llm_status_widget.setStyleSheet("color: #88909a; font-weight: 700;")
-        llm_info_widget.setText("Train LLM to enable AI chat capabilities")
+        llm_status_widget.setStyleSheet("")
+
+    info_parts = [architecture]
+    if trained_samples > 0:
+        info_parts.append(f"samples={trained_samples}")
+    if finished_short:
+        info_parts.append(f"last={finished_short}")
+    llm_info_widget.setText(" | ".join(info_parts))
 
 
 # News/Policy signal functions (use caching)
@@ -1722,3 +2040,6 @@ def _apply_enhanced_ops() -> None:
     # This is called from app.py to swap in enhanced versions
     # All functions are already aliased above
     pass
+
+
+

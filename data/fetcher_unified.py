@@ -827,6 +827,40 @@ class UnifiedDataFetcher:
         """Get detailed status of all data sources."""
         return self._health_monitor.get_all_statuses()
     
+    def invalidate_result_cache(
+        self,
+        code: str | None = None,
+        interval: str | None = None,
+    ) -> int:
+        """Invalidate request-level cached results.
+        
+        Returns:
+            Number of cache entries removed.
+        """
+        removed = 0
+        with self._result_cache_lock:
+            if code is None and interval is None:
+                removed = len(self._result_cache)
+                self._result_cache.clear()
+                return removed
+            code_token = clean_code(code) if code else None
+            iv_token = self._normalize_interval_token(interval or "")
+            targets: list[str] = []
+            for key in self._result_cache:
+                parts = key.split(":")
+                if len(parts) < 5:
+                    continue
+                _, key_code, key_iv, _, _ = parts[:5]
+                if code_token and key_code != code_token:
+                    continue
+                if interval and key_iv != iv_token:
+                    continue
+                targets.append(key)
+            for key in targets:
+                self._result_cache.pop(key, None)
+            removed = len(targets)
+        return removed
+    
     def get_metrics(self) -> dict[str, Any]:
         """Get fetching metrics."""
         with self._metrics_lock:

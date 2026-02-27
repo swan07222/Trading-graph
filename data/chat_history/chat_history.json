@@ -1,0 +1,95 @@
+{
+  "messages": [
+    {
+      "timestamp": "00:37:22",
+      "sender": "AI",
+      "role": "assistant",
+      "text": "AI message feed ready.",
+      "level": "info",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "00:37:23",
+      "sender": "System",
+      "role": "system",
+      "text": "No trained GM model found. Please train GM.",
+      "level": "warning",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "00:37:23",
+      "sender": "System",
+      "role": "system",
+      "text": "System initialized - Ready for analysis",
+      "level": "info",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "00:37:29",
+      "sender": "System",
+      "role": "system",
+      "text": "Starting optimized LLM training (max 200 articles, includes self-chat model)...",
+      "level": "info",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "00:37:29",
+      "sender": "System",
+      "role": "system",
+      "text": "Starting optimized LLM training with self-chat model...",
+      "level": "info",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "00:37:30",
+      "sender": "System",
+      "role": "system",
+      "text": "LLM training complete: status=trained, samples=200, zh=200, en=0, arch=mixture_of_experts, collected=200, mode=direct_news, chat_model=error. notes=Transformer labels disabled by design; training MoE with self-supervised labels.; Feature scaling applied (StandardScaler).; Validation split uses latest-timestamp holdout (temporal split).; Text embe",
+      "level": "success",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "00:37:30",
+      "sender": "System",
+      "role": "system",
+      "text": "LLM training complete: status=trained, samples=200, zh=200, en=0, arch=mixture_of_experts, collected=200, mode=direct_news, chat_model=error. notes=Transformer labels disabled by design; training MoE with self-supervised labels.; Feature scaling applied (StandardScaler).; Validation split uses latest-timestamp holdout (temporal split).; Text embe",
+      "level": "success",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "00:37:34",
+      "sender": "System",
+      "role": "system",
+      "text": "Auto Train LLM panel opened.",
+      "level": "info",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "00:39:39",
+      "sender": "System",
+      "role": "system",
+      "text": "No trained GM model found. Please train GM.",
+      "level": "warning",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "00:39:39",
+      "sender": "System",
+      "role": "system",
+      "text": "System initialized - Ready for analysis",
+      "level": "info",
+      "intent": "",
+      "entities": {}
+    }
+  ],
+  "saved_at": "2026-02-27T00:39:39.224059"
+}

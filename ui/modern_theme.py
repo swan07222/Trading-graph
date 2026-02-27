@@ -14,30 +14,30 @@ class ModernColors:
     """Professional midnight palette with bright, high-contrast accents."""
 
     # Core surfaces
-    BG_CANVAS = "#040a15"
-    BG_PRIMARY = "#0a1426"
-    BG_SECONDARY = "#111f37"
-    BG_TERTIARY = "#172a48"
-    BG_ELEVATED = "#1f3760"
+    BG_CANVAS = "#060d18"
+    BG_PRIMARY = "#0c1628"
+    BG_SECONDARY = "#132238"
+    BG_TERTIARY = "#1a2d48"
+    BG_ELEVATED = "#223b5f"
 
     # Brand and semantic accents
-    ACCENT_PRIMARY = "#3ad8ff"
-    ACCENT_SECONDARY = "#67e1bf"
-    ACCENT_SUCCESS = "#36d3a4"
-    ACCENT_WARNING = "#f1c96d"
-    ACCENT_DANGER = "#ff6c80"
-    ACCENT_INFO = "#83abff"
+    ACCENT_PRIMARY = "#34d1ff"
+    ACCENT_SECONDARY = "#75dcb8"
+    ACCENT_SUCCESS = "#38cf9e"
+    ACCENT_WARNING = "#ebc36a"
+    ACCENT_DANGER = "#ff7485"
+    ACCENT_INFO = "#8aaeff"
 
     # Text
-    TEXT_PRIMARY = "#ecf3ff"
-    TEXT_SECONDARY = "#b7c8e8"
-    TEXT_MUTED = "#7f96c0"
-    TEXT_STRONG = "#f7fbff"
+    TEXT_PRIMARY = "#edf4ff"
+    TEXT_SECONDARY = "#b7c9e4"
+    TEXT_MUTED = "#839ab8"
+    TEXT_STRONG = "#fbfdff"
 
     # Borders
-    BORDER_SUBTLE = "#24406b"
-    BORDER_DEFAULT = "#31588f"
-    BORDER_FOCUS = "#69deff"
+    BORDER_SUBTLE = "#263f63"
+    BORDER_DEFAULT = "#345a8a"
+    BORDER_FOCUS = "#71ddff"
 
     # Signal colors
     SIGNAL_BUY = ACCENT_SUCCESS
@@ -189,17 +189,17 @@ def get_main_window_style() -> str:
             background: qlineargradient(
                 x1:0, y1:0, x2:0, y2:1,
                 stop:0 {ModernColors.BG_PRIMARY},
-                stop:0.42 #091629,
+                stop:0.45 #0a182c,
                 stop:1 {ModernColors.BG_CANVAS}
             );
         }}
         QWidget#AppRoot {{
             background: qradialgradient(
                 cx:0.12, cy:0.06, radius:1.2, fx:0.14, fy:0.08,
-                stop:0 #1d3d69,
-                stop:0.25 #102440,
-                stop:0.55 #0b1830,
-                stop:1 #050d1d
+                stop:0 #24466e,
+                stop:0.24 #132b49,
+                stop:0.56 #0c1d36,
+                stop:1 #071323
             );
         }}
     """
@@ -216,6 +216,10 @@ def get_central_widget_style() -> str:
         QLabel {{
             background: transparent;
         }}
+        QLineEdit, QTextEdit, QPlainTextEdit {{
+            selection-background-color: #2f699d;
+            selection-color: {ModernColors.TEXT_STRONG};
+        }}
         QWidget:disabled {{
             color: {ModernColors.TEXT_MUTED};
         }}
@@ -231,22 +235,22 @@ def get_card_style() -> str:
         QFrame#statusCard {{
             background: qlineargradient(
                 x1:0, y1:0, x2:0, y2:1,
-                stop:0 #1a3053,
-                stop:0.55 #132744,
-                stop:1 #10203a
+                stop:0 #1d3558,
+                stop:0.54 #152947,
+                stop:1 #11223e
             );
             border: 1px solid {ModernColors.BORDER_SUBTLE};
-            border-radius: 16px;
+            border-radius: 14px;
         }}
         QFrame#actionStrip,
         QFrame#chartActionStrip {{
             background: qlineargradient(
                 x1:0, y1:0, x2:1, y2:0,
-                stop:0 #152b4a,
-                stop:1 #11233e
+                stop:0 #18304f,
+                stop:1 #12253f
             );
             border: 1px solid {ModernColors.BORDER_SUBTLE};
-            border-radius: 13px;
+            border-radius: 12px;
             padding: 4px;
         }}
         QFrame#cardFrame:hover,
@@ -265,13 +269,13 @@ def get_group_box_style() -> str:
         QGroupBox {{
             background: qlineargradient(
                 x1:0, y1:0, x2:0, y2:1,
-                stop:0 #152a48,
-                stop:1 #101f38
+                stop:0 #173052,
+                stop:1 #12243f
             );
             border: 1px solid {ModernColors.BORDER_SUBTLE};
-            border-radius: 14px;
+            border-radius: 12px;
             margin-top: 11px;
-            padding: 15px 11px 11px 11px;
+            padding: 14px 12px 12px 12px;
             font-size: {ModernFonts.SIZE_SM}px;
             font-weight: {ModernFonts.WEIGHT_SEMIBOLD};
             color: {ModernColors.TEXT_SECONDARY};
@@ -281,8 +285,8 @@ def get_group_box_style() -> str:
             subcontrol-position: top left;
             left: 12px;
             top: -1px;
-            padding: 2px 9px;
-            background: #10203a;
+            padding: 2px 10px;
+            background: #132746;
             border: 1px solid {ModernColors.BORDER_SUBTLE};
             border-radius: 7px;
             color: {ModernColors.ACCENT_INFO};
@@ -322,8 +326,8 @@ def get_button_style(primary: bool = False, danger: bool = False) -> str:
             color: {ModernColors.TEXT_STRONG};
             border: 1px solid {border};
             border-radius: 10px;
-            padding: 6px 12px;
-            min-height: 32px;
+            padding: 7px 14px;
+            min-height: 34px;
             font-size: {ModernFonts.SIZE_SM}px;
             font-weight: {ModernFonts.WEIGHT_SEMIBOLD};
         }}
@@ -332,7 +336,7 @@ def get_button_style(primary: bool = False, danger: bool = False) -> str:
             border-color: {ModernColors.BORDER_FOCUS};
         }}
         QPushButton:pressed {{
-            background: #132849;
+            background: #132646;
         }}
         QPushButton:disabled {{
             background: #112238;
@@ -345,11 +349,11 @@ def get_button_style(primary: bool = False, danger: bool = False) -> str:
 def get_table_style() -> str:
     return f"""
         QTableWidget, QTableView, QListWidget {{
-            background: #0f1d34;
-            alternate-background-color: #0c1830;
+            background: #11223b;
+            alternate-background-color: #0e1d33;
             border: 1px solid {ModernColors.BORDER_SUBTLE};
             border-radius: 12px;
-            gridline-color: #1f3353;
+            gridline-color: #233a5d;
             selection-background-color: #254f80;
             selection-color: {ModernColors.TEXT_STRONG};
             color: {ModernColors.TEXT_PRIMARY};
@@ -370,22 +374,22 @@ def get_table_style() -> str:
         QHeaderView::section {{
             background: qlineargradient(
                 x1:0, y1:0, x2:0, y2:1,
-                stop:0 #1a3358,
-                stop:1 #142845
+                stop:0 #203d64,
+                stop:1 #173150
             );
             color: {ModernColors.TEXT_SECONDARY};
             border: none;
-            border-right: 1px solid #274066;
-            border-bottom: 1px solid #274066;
+            border-right: 1px solid #2b466f;
+            border-bottom: 1px solid #2b466f;
             padding: 8px 10px;
             font-size: {ModernFonts.SIZE_XS}px;
             font-weight: {ModernFonts.WEIGHT_SEMIBOLD};
         }}
         QTableCornerButton::section {{
-            background: #173154;
+            background: #1a3558;
             border: none;
-            border-right: 1px solid #274066;
-            border-bottom: 1px solid #274066;
+            border-right: 1px solid #2b466f;
+            border-bottom: 1px solid #2b466f;
         }}
     """
 
@@ -468,10 +472,10 @@ def get_input_style() -> str:
     mono_font = get_monospace_font_family()
     return f"""
         QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QTextEdit, QPlainTextEdit {{
-            background: #152946;
+            background: #163050;
             border: 1px solid {ModernColors.BORDER_SUBTLE};
             border-radius: 9px;
-            padding: 6px 9px;
+            padding: 7px 10px;
             color: {ModernColors.TEXT_PRIMARY};
             selection-background-color: #2f689d;
             selection-color: {ModernColors.TEXT_STRONG};
@@ -483,7 +487,10 @@ def get_input_style() -> str:
         }}
         QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QTextEdit:focus {{
             border-color: {ModernColors.BORDER_FOCUS};
-            background: #1b3559;
+            background: #1d3a60;
+        }}
+        QLineEdit::placeholder, QTextEdit::placeholder {{
+            color: {ModernColors.TEXT_MUTED};
         }}
         QComboBox::drop-down {{
             border: none;
@@ -504,7 +511,7 @@ def get_input_style() -> str:
             width: 16px;
         }}
         QComboBox QAbstractItemView {{
-            background: #132845;
+            background: #143050;
             border: 1px solid {ModernColors.BORDER_DEFAULT};
             selection-background-color: #2b5585;
             color: {ModernColors.TEXT_PRIMARY};
@@ -517,16 +524,16 @@ def get_tab_widget_style() -> str:
         QTabWidget::pane {{
             border: 1px solid {ModernColors.BORDER_SUBTLE};
             border-radius: 12px;
-            background: #101f36;
+            background: #11223a;
             top: -1px;
         }}
         QTabBar::tab {{
-            background: #142744;
+            background: #173050;
             color: {ModernColors.TEXT_MUTED};
             border: 1px solid transparent;
             border-top-left-radius: 9px;
             border-top-right-radius: 9px;
-            padding: 7px 13px;
+            padding: 8px 14px;
             margin-right: 5px;
             min-width: 78px;
             font-size: {ModernFonts.SIZE_SM}px;
@@ -535,14 +542,14 @@ def get_tab_widget_style() -> str:
         QTabBar::tab:selected {{
             background: qlineargradient(
                 x1:0, y1:0, x2:0, y2:1,
-                stop:0 #244b78,
-                stop:1 #1a3658
+                stop:0 #285684,
+                stop:1 #1d4066
             );
             color: {ModernColors.TEXT_PRIMARY};
             border-color: {ModernColors.BORDER_DEFAULT};
         }}
         QTabBar::tab:hover:!selected {{
-            background: #1b3558;
+            background: #214169;
             color: {ModernColors.TEXT_SECONDARY};
         }}
     """
@@ -591,32 +598,32 @@ def get_scroll_area_style() -> str:
             border: none;
         }
         QScrollBar:vertical {
-            background: #0f2038;
-            width: 11px;
+            background: #12253f;
+            width: 10px;
             margin: 2px;
             border-radius: 5px;
         }
         QScrollBar::handle:vertical {
-            background: #375983;
+            background: #3b628f;
             min-height: 30px;
             border-radius: 5px;
         }
         QScrollBar::handle:vertical:hover {
-            background: #4e79ad;
+            background: #5683b8;
         }
         QScrollBar:horizontal {
-            background: #0f2038;
-            height: 11px;
+            background: #12253f;
+            height: 10px;
             margin: 2px;
             border-radius: 5px;
         }
         QScrollBar::handle:horizontal {
-            background: #375983;
+            background: #3b628f;
             min-width: 28px;
             border-radius: 5px;
         }
         QScrollBar::handle:horizontal:hover {
-            background: #4e79ad;
+            background: #5683b8;
         }
         QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical,
         QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {

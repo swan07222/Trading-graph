@@ -191,7 +191,12 @@ def _on_ai_chat_send(self: Any) -> None:
         )
         return
 
-    self._append_ai_chat_message("System", "AI is searching the internet and thinking...", role="system", level="info")
+    self._append_ai_chat_message(
+        "System",
+        "AI is thinking with local model context...",
+        role="system",
+        level="info",
+    )
 
     def _work() -> dict[str, Any]:
         return self._generate_ai_chat_reply(
@@ -618,7 +623,7 @@ def _generate_ai_chat_reply(
         return {
             "answer": str(payload.get("answer", "") or "").strip(),
             "action": str(payload.get("action", "") or "").strip(),
-            "local_model_ready": True,  # Self-trained model
+            "local_model_ready": bool(payload.get("local_model_ready", False)),
         }
     except Exception as exc:
         log.warning("Self-trained LLM chat failed: %s", exc)
@@ -661,8 +666,8 @@ def _start_llm_training(self: Any) -> None:
         articles = collector.collect_news(limit=450, hours_back=120)
         chat_report = analyzer.train_chat_model(
             chat_history_path="data/chat_history/chat_history.json",
-            max_steps=800,
-            epochs=1,
+            max_steps=1800,
+            epochs=2,
         )
         if articles:
             report = dict(analyzer.train(articles, max_samples=1000) or {})

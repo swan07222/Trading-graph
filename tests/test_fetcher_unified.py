@@ -42,6 +42,7 @@ from data.fetcher_unified import (
     FetchResult,
     get_unified_fetcher,
 )
+import data.fetcher_unified as unified_mod
 from data.validator import DataValidator, ValidationResult, get_validator
 
 
@@ -400,6 +401,174 @@ class TestUnifiedDataFetcher:
         assert "successful_requests" in metrics
         assert "failed_requests" in metrics
         assert "health_monitor" in metrics
+
+    def test_direct_fetch_handles_days_without_bars(self):
+        """Direct mode should derive bars from days without raising errors."""
+        mock_inner = Mock()
+        mock_inner.get_history.return_value = pd.DataFrame(
+            {
+                "open": [100, 101, 102],
+                "high": [101, 102, 103],
+                "low": [99, 100, 101],
+                "close": [100, 101, 102],
+                "volume": [1000, 1100, 1200],
+            },
+            index=pd.date_range("2024-01-01", periods=3, freq="1d"),
+        )
+        fetcher = UnifiedDataFetcher(inner_fetcher=mock_inner)
+
+        result = fetcher.fetch_with_options(
+            "000001",
+            FetchOptions(interval="1d", days=3, progressive=False, validate=False),
+        )
+
+        assert result.success
+        kwargs = mock_inner.get_history.call_args.kwargs
+        assert kwargs["bars"] == 3
+
+    def test_partial_data_rejected_when_allow_partial_false(self):
+        """Strict mode should reject incomplete direct-fetch data."""
+        mock_inner = Mock()
+        mock_inner.get_history.return_value = pd.DataFrame(
+            {
+                "open": [100 + i for i in range(20)],
+                "high": [101 + i for i in range(20)],
+                "low": [99 + i for i in range(20)],
+                "close": [100 + i for i in range(20)],
+                "volume": [1000 + i for i in range(20)],
+            },
+            index=pd.date_range("2024-01-01", periods=20, freq="1d"),
+        )
+        fetcher = UnifiedDataFetcher(inner_fetcher=mock_inner)
+
+        result = fetcher.fetch_with_options(
+            "000001",
+            FetchOptions(
+                interval="1d",
+                bars=100,
+                progressive=False,
+                validate=False,
+                allow_partial=False,
+                partial_threshold=0.4,
+            ),
+        )
+
+        assert result.success is False
+        assert result.load_status == LoadStatus.INSUFFICIENT
+        assert "Partial data rejected" in str(result.error)
+
+    def test_result_cache_hits_and_force_refresh(self):
+        """Versioned in-memory cache should avoid duplicate fetches unless forced."""
+        mock_inner = Mock()
+        mock_inner.get_history.return_value = pd.DataFrame(
+            {
+                "open": [100, 101, 102, 103],
+                "high": [101, 102, 103, 104],
+                "low": [99, 100, 101, 102],
+                "close": [100, 101, 102, 103],
+                "volume": [1000, 1100, 1200, 1300],
+            },
+            index=pd.date_range("2024-01-01", periods=4, freq="1d"),
+        )
+        fetcher = UnifiedDataFetcher(inner_fetcher=mock_inner)
+
+        options = FetchOptions(
+            interval="1d",
+            bars=4,
+            progressive=False,
+            validate=False,
+            use_cache=True,
+        )
+        first = fetcher.fetch_with_options("000001", options)
+        second = fetcher.fetch_with_options("000001", options)
+        refreshed = fetcher.fetch_with_options(
+            "000001",
+            FetchOptions(
+                interval="1d",
+                bars=4,
+                progressive=False,
+                validate=False,
+                use_cache=True,
+                force_refresh=True,
+            ),
+        )
+
+        assert first.success
+        assert second.success
+        assert second.cache_hit is True
+        assert refreshed.success
+        assert mock_inner.get_history.call_count == 2
+
+    def test_stale_intraday_cache_triggers_refresh(self):
+        """Stale cached intraday frame should be refreshed instead of reused."""
+        old_index = pd.date_range("2020-03-16 10:00", periods=20, freq="1min")
+        fresh_index = pd.date_range("2024-03-15 10:00", periods=20, freq="1min")
+        old_df = pd.DataFrame(
+            {
+                "open": [100 + i for i in range(20)],
+                "high": [101 + i for i in range(20)],
+                "low": [99 + i for i in range(20)],
+                "close": [100 + i for i in range(20)],
+                "volume": [1000 + i for i in range(20)],
+            },
+            index=old_index,
+        )
+        fresh_df = pd.DataFrame(
+            {
+                "open": [200 + i for i in range(20)],
+                "high": [201 + i for i in range(20)],
+                "low": [199 + i for i in range(20)],
+                "close": [200 + i for i in range(20)],
+                "volume": [2000 + i for i in range(20)],
+            },
+            index=fresh_index,
+        )
+        mock_inner = Mock()
+        mock_inner.get_history.side_effect = [old_df, fresh_df]
+        fetcher = UnifiedDataFetcher(inner_fetcher=mock_inner)
+        fetcher._session_checker.is_market_open = lambda _ts: True  # type: ignore[assignment]
+
+        options = FetchOptions(
+            interval="1m",
+            bars=20,
+            progressive=False,
+            validate=False,
+            use_cache=True,
+        )
+        first = fetcher.fetch_with_options("000001", options)
+        second = fetcher.fetch_with_options("000001", options)
+
+        assert first.success
+        assert second.success
+        assert mock_inner.get_history.call_count == 2
+        assert float(second.data.iloc[-1]["close"]) == float(fresh_df.iloc[-1]["close"])
+
+    def test_rate_limit_timeout_returns_failure(self, monkeypatch: pytest.MonkeyPatch):
+        """Rate-limit gate timeout should fail request when no fallback exists."""
+        mock_inner = Mock()
+        mock_inner.get_history.return_value = pd.DataFrame()
+        fetcher = UnifiedDataFetcher(inner_fetcher=mock_inner)
+
+        monkeypatch.setattr(unified_mod, "_HAS_ENHANCED_RATE_LIMITING", True)
+        monkeypatch.setattr(
+            unified_mod,
+            "_acquire_rate_limit",
+            lambda _source, timeout=30.0: False,
+        )
+
+        result = fetcher.fetch_with_options(
+            "000001",
+            FetchOptions(
+                interval="1d",
+                bars=20,
+                progressive=False,
+                validate=False,
+                preferred_source="akshare",
+            ),
+        )
+
+        assert result.success is False
+        assert "Rate limit acquisition timed out" in str(result.error)
 
 
 class TestValidator:

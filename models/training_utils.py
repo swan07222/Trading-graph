@@ -13,6 +13,7 @@ This module provides:
 from __future__ import annotations
 
 import time
+import warnings
 from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
@@ -457,7 +458,15 @@ class LearningRateScheduler:
             if metric is not None:
                 self._scheduler.step(metric)
         elif self._scheduler is not None:
-            self._scheduler.step()
+            # Allow scheduler-only stepping in tests/analysis flows without
+            # surfacing PyTorch's optimizer-order warning.
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message=r"Detected call of `lr_scheduler.step\(\)` before `optimizer.step\(\)`\.",
+                    category=UserWarning,
+                )
+                self._scheduler.step()
         
         current_lr = self.optimizer.param_groups[0]['lr']
         

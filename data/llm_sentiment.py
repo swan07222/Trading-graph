@@ -1,4 +1,4 @@
-﻿"""Bilingual LLM sentiment analyzer with auto-training.
+"""Bilingual LLM sentiment analyzer with auto-training.
 
 Architecture:
 - LLM corpus collection is SEPARATE from stock-specific data collection
@@ -84,6 +84,7 @@ INJECTION_PATTERNS = [
 
 _SKLEARN_AVAILABLE = False
 _SKLEARN_MLP_AVAILABLE = False
+_SKLEARN_TEXT_AVAILABLE = False
 
 try:
     from sklearn.exceptions import ConvergenceWarning as _SklearnConvergenceWarning
@@ -110,6 +111,14 @@ try:
     _SKLEARN_MLP_AVAILABLE = True
 except Exception:
     _SKLEARN_MLP_AVAILABLE = False
+
+try:
+    from sklearn.decomposition import TruncatedSVD
+    from sklearn.feature_extraction.text import TfidfVectorizer
+
+    _SKLEARN_TEXT_AVAILABLE = True
+except Exception:
+    _SKLEARN_TEXT_AVAILABLE = False
 
 
 # ---------------------------------------------------------------------------
@@ -508,7 +517,7 @@ class _AsyncAnalyzeProcessor:
         assert self._semaphore is not None
 
         async with self._semaphore:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             result = await loop.run_in_executor(
                 None,
                 lambda: analyze_fn(article, use_cache=use_cache),
@@ -533,7 +542,7 @@ class _AsyncAnalyzeProcessor:
             index: int,
         ) -> LLMSentimentResult:
             async with self._semaphore:
-                loop = asyncio.get_event_loop()
+                loop = asyncio.get_running_loop()
                 result = await loop.run_in_executor(
                     None,
                     lambda: analyze_fn(article, use_cache=use_cache),
@@ -575,20 +584,27 @@ class _AsyncAnalyzeProcessor:
     ) -> list[LLMSentimentResult]:
         """Synchronous wrapper for batch analysis."""
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # Create a new loop in a separate thread
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(
-                        asyncio.run,
-                        self.analyze_batch(analyze_fn, articles, use_cache, progress_callback),
-                    )
-                    return future.result(timeout=self._queue_timeout)
-            else:
-                return loop.run_until_complete(
+            asyncio.get_running_loop()
+        except RuntimeError:
+            # No running loop in this thread: create and close a temporary loop safely.
+            try:
+                return asyncio.run(
                     self.analyze_batch(analyze_fn, articles, use_cache, progress_callback)
                 )
+            except Exception as exc:
+                log.debug("Async batch analyze failed, falling back to sync: %s", exc)
+                return [analyze_fn(a, use_cache=use_cache) for a in articles]
+
+        try:
+            # Already inside an active loop; run the async batch in a worker thread.
+            import concurrent.futures
+
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(
+                    asyncio.run,
+                    self.analyze_batch(analyze_fn, articles, use_cache, progress_callback),
+                )
+                return future.result(timeout=self._queue_timeout)
         except Exception as exc:
             log.debug("Async batch analyze failed, falling back to sync: %s", exc)
             # Fallback to sequential processing
@@ -793,7 +809,59 @@ class LLM_sentimentAnalyzer:
     ZH_MARKET_BEAR = ["熊市", "看空", "做空", "回调", "弱势"]
     EN_MARKET_BULL = ["bull market", "long", "breakout", "risk-on"]
     EN_MARKET_BEAR = ["bear market", "short", "breakdown", "risk-off"]
+    ZH_INTENSIFIERS = ("大幅", "显著", "强劲", "明显", "持续", "快速", "重大")
+    EN_INTENSIFIERS = ("strong", "sharply", "significant", "material", "major", "sustained")
+    ZH_HEDGE_WORDS = ("或", "可能", "不确定", "传闻", "谨慎", "观望")
+    EN_HEDGE_WORDS = ("may", "might", "uncertain", "rumor", "cautious", "mixed")
     _CLASS_ORDER = np.asarray([-1, 0, 1], dtype=int)
+    _FINANCE_KEYWORDS = (
+        "stock",
+        "stocks",
+        "market",
+        "trading",
+        "invest",
+        "investment",
+        "portfolio",
+        "equity",
+        "earnings",
+        "economy",
+        "economic",
+        "policy",
+        "interest rate",
+        "inflation",
+        "fed",
+        "etf",
+        "fund",
+        "bond",
+        "bank",
+        "finance",
+        "bull",
+        "bear",
+        "a-share",
+        "ipo",
+        "merger",
+        "acquisition",
+        "regulatory",
+        "股票",
+        "股市",
+        "投资",
+        "基金",
+        "债券",
+        "期货",
+        "外汇",
+        "财经",
+        "金融",
+        "央行",
+        "利率",
+        "通胀",
+        "政策",
+        "监管",
+        "证券",
+        "牛市",
+        "熊市",
+        "沪深",
+        "上证",
+    )
 
     def __init__(
         self,
@@ -830,6 +898,7 @@ class LLM_sentimentAnalyzer:
         self._hybrid_calibrator_path = self.cache_dir / "llm_hybrid_nn.pkl"
         self._moe_path = self.cache_dir / "llm_moe.pkl"
         self._scaler_path = self.cache_dir / "llm_scaler.pkl"
+        self._embedder_path = self.cache_dir / "llm_text_embedder.pkl"
         self._status_path = self.cache_dir / "llm_training_status.json"
         self._seen_article_path = self.cache_dir / "llm_seen_articles.json"
         self._training_corpus_path = self.cache_dir / "llm_training_corpus.jsonl"
@@ -868,6 +937,7 @@ class LLM_sentimentAnalyzer:
         self._load_hybrid_calibrator()
         self._load_moe_model()
         self._load_scaler()
+        self._load_embedder()
         self._load_seen_articles()
         self._chat_llm: Any = None
         self._chat_lock = threading.RLock()
@@ -901,6 +971,200 @@ class LLM_sentimentAnalyzer:
             pass
         return float(default)
 
+    @staticmethod
+    def _article_timestamp_seconds(article: NewsArticle) -> float:
+        published_at = getattr(article, "published_at", None)
+        if isinstance(published_at, datetime):
+            try:
+                return float(published_at.timestamp())
+            except Exception:
+                pass
+        collected_at = getattr(article, "collected_at", None)
+        if isinstance(collected_at, datetime):
+            try:
+                return float(collected_at.timestamp())
+            except Exception:
+                pass
+        return float(time.time())
+
+    def _finance_focus_score(self, article: NewsArticle) -> float:
+        text = " ".join(
+            [
+                str(getattr(article, "title", "") or ""),
+                str(getattr(article, "summary", "") or ""),
+                str(getattr(article, "content", "") or ""),
+            ]
+        ).lower()
+        category = str(getattr(article, "category", "") or "").strip().lower()
+        source = str(getattr(article, "source", "") or "").strip().lower()
+        tags = [str(v or "").strip().lower() for v in list(getattr(article, "tags", []) or [])]
+        entities = [
+            str(v or "").strip().lower()
+            for v in list(getattr(article, "entities", []) or [])
+        ]
+        bag_text = " ".join([text, " ".join(tags), " ".join(entities), category, source]).lower()
+
+        score = 0.0
+        if category in {"market", "policy", "company", "economic", "regulatory"}:
+            score += 0.35
+
+        match_count = 0
+        for kw in self._FINANCE_KEYWORDS:
+            if kw in bag_text:
+                match_count += 1
+        if match_count > 0:
+            score += min(0.40, 0.07 * float(match_count))
+
+        if any(
+            token in source
+            for token in (
+                "finance",
+                "bloomberg",
+                "reuters",
+                "marketwatch",
+                "eastmoney",
+                "sina",
+                "caixin",
+                "财",
+                "证",
+            )
+        ):
+            score += 0.10
+
+        relevance = self._clip(
+            self._safe_float(getattr(article, "relevance_score", 0.5), 0.5), 0.0, 1.0
+        )
+        score += 0.15 * relevance
+        return self._clip(float(score), 0.0, 1.0)
+
+    def _select_finance_balanced_articles(
+        self,
+        rows: list[NewsArticle],
+        *,
+        max_samples: int,
+        target_finance_ratio: float = 0.75,
+    ) -> list[NewsArticle]:
+        if not rows:
+            return []
+
+        n_target = max(1, int(max_samples))
+        ratio = self._clip(float(target_finance_ratio), 0.50, 0.95)
+        now_ts = float(time.time())
+        scored: list[tuple[NewsArticle, float, float]] = []
+
+        for article in list(rows):
+            finance_score = self._finance_focus_score(article)
+            relevance = self._clip(
+                self._safe_float(getattr(article, "relevance_score", 0.5), 0.5), 0.0, 1.0
+            )
+            age_hours = max(
+                0.0,
+                (now_ts - self._article_timestamp_seconds(article)) / 3600.0,
+            )
+            recency = 1.0 / (1.0 + age_hours / 168.0)
+            rank_score = (0.55 * finance_score) + (0.25 * relevance) + (0.20 * recency)
+            scored.append((article, finance_score, float(rank_score)))
+
+        finance_rows = [row for row in scored if row[1] >= 0.45]
+        non_finance_rows = [row for row in scored if row[1] < 0.45]
+        finance_rows.sort(key=lambda x: x[2], reverse=True)
+        non_finance_rows.sort(key=lambda x: x[2], reverse=True)
+
+        if not finance_rows or not non_finance_rows:
+            all_rows = sorted(scored, key=lambda x: x[2], reverse=True)
+            return [article for article, _, _ in all_rows[:n_target]]
+
+        desired_finance = int(round(n_target * ratio))
+        desired_finance = max(1, min(desired_finance, n_target - 1))
+        selected: list[NewsArticle] = [
+            article for article, _, _ in finance_rows[:desired_finance]
+        ]
+
+        remaining_slots = n_target - len(selected)
+        selected.extend(
+            [article for article, _, _ in non_finance_rows[:remaining_slots]]
+        )
+
+        if len(selected) < n_target:
+            selected_ids = {str(getattr(a, "id", "") or "") for a in selected}
+            overflow = finance_rows[desired_finance:] + non_finance_rows[remaining_slots:]
+            for article, _, _ in overflow:
+                aid = str(getattr(article, "id", "") or "")
+                if aid and aid in selected_ids:
+                    continue
+                selected.append(article)
+                if aid:
+                    selected_ids.add(aid)
+                if len(selected) >= n_target:
+                    break
+
+        return selected[:n_target]
+
+    def _split_train_validation_temporal(
+        self,
+        rows: list[NewsArticle],
+        y_arr: np.ndarray,
+        validation_split: float,
+    ) -> tuple[np.ndarray, np.ndarray, str]:
+        n_samples = int(len(y_arr))
+        if n_samples <= 0:
+            return np.arange(0, dtype=int), np.arange(0, dtype=int), "none"
+
+        split = float(max(0.0, min(0.90, float(validation_split))))
+        if split <= 0.0 or n_samples <= 1:
+            return np.arange(n_samples, dtype=int), np.empty(0, dtype=int), "none"
+
+        n_val = int(round(n_samples * split))
+        if n_samples >= 3:
+            n_val = max(1, min(n_val, n_samples - 2))
+        elif n_samples == 2:
+            n_val = 1
+        else:
+            n_val = 0
+
+        if n_val <= 0:
+            return np.arange(n_samples, dtype=int), np.empty(0, dtype=int), "none"
+
+        timestamps: list[float] = []
+        for idx in range(n_samples):
+            if idx < len(rows):
+                timestamps.append(self._article_timestamp_seconds(rows[idx]))
+            else:
+                timestamps.append(float(time.time()) + float(idx))
+
+        ts_arr = np.asarray(timestamps, dtype=float)
+        if ts_arr.size != n_samples or float(np.max(ts_arr) - np.min(ts_arr)) <= 1e-9:
+            train_idx, val_idx = self._split_train_validation_indices(y_arr, split)
+            return train_idx, val_idx, "random_fallback"
+
+        ordered = np.argsort(ts_arr)
+        val_idx = np.asarray(ordered[-n_val:], dtype=int)
+        train_idx = np.asarray(ordered[:-n_val], dtype=int)
+
+        if train_idx.size <= 0 and val_idx.size > 0:
+            move_idx = int(val_idx[0])
+            val_idx = np.asarray([i for i in val_idx if int(i) != move_idx], dtype=int)
+            train_idx = np.asarray([move_idx], dtype=int)
+
+        if val_idx.size > 0 and train_idx.size > 0:
+            for cls in np.unique(y_arr):
+                if np.sum(y_arr == cls) < 2:
+                    continue
+                if np.any(y_arr[train_idx] == cls):
+                    continue
+                candidates = [int(i) for i in val_idx if int(y_arr[int(i)]) == int(cls)]
+                if not candidates:
+                    continue
+                move_idx = sorted(candidates, key=lambda i: float(ts_arr[int(i)]))[0]
+                val_idx = np.asarray([i for i in val_idx if int(i) != move_idx], dtype=int)
+                train_idx = np.append(train_idx, move_idx)
+
+        if train_idx.size <= 0:
+            train_idx, val_idx = self._split_train_validation_indices(y_arr, split)
+            return train_idx, val_idx, "random_fallback"
+
+        return np.asarray(train_idx, dtype=int), np.asarray(val_idx, dtype=int), "temporal"
+
     def _detect_language(self, text: str) -> str:
         zh = len(re.findall(r"[\u4e00-\u9fff]", str(text or "")))
         total = len(re.sub(r"\s+", "", str(text or "")))
@@ -916,6 +1180,118 @@ class LLM_sentimentAnalyzer:
         if d <= 0:
             return 0.0
         return self._clip((p - n) / float(d), -1.0, 1.0)
+
+    def _semantic_sentiment_score(self, text: str, language: str) -> tuple[float, float]:
+        """Return (semantic_score, confidence) with negation/hedge handling."""
+        raw = str(text or "")
+        t = raw.lower()
+        if language == "zh":
+            base = self._kw_score(raw, self.ZH_POS, self.ZH_NEG)
+            intensifier_hits = sum(1 for w in self.ZH_INTENSIFIERS if w in raw)
+            hedge_hits = sum(1 for w in self.ZH_HEDGE_WORDS if w in raw)
+            neg_pos = len(
+                re.findall(
+                    r"(?:不|未|没有|并非).{0,2}(?:利好|上涨|增持|突破|支持|刺激|复苏|看多)",
+                    raw,
+                )
+            )
+            neg_neg = len(
+                re.findall(
+                    r"(?:不|未|没有|并非).{0,2}(?:利空|下跌|减持|处罚|调查|风险|收紧|下滑|看空)",
+                    raw,
+                )
+            )
+            score = float(base) - (0.28 * float(neg_pos)) + (0.20 * float(neg_neg))
+            if "但是" in raw or "但" in raw:
+                parts = re.split(r"但是|但", raw, maxsplit=1)
+                if len(parts) == 2:
+                    tail = self._kw_score(parts[1], self.ZH_POS, self.ZH_NEG)
+                    score = (0.35 * score) + (0.65 * tail)
+        else:
+            base = self._kw_score(t, self.EN_POS, self.EN_NEG)
+            intensifier_hits = sum(1 for w in self.EN_INTENSIFIERS if w in t)
+            hedge_hits = sum(1 for w in self.EN_HEDGE_WORDS if w in t)
+            neg_pos = len(
+                re.findall(
+                    r"\b(?:not|no|never|without)\s+(?:bullish|upside|support|stimulus|growth|recovery|positive)\b",
+                    t,
+                )
+            )
+            neg_neg = len(
+                re.findall(
+                    r"\b(?:not|no|never|without)\s+(?:bearish|downside|tightening|restriction|selloff|risk|negative)\b",
+                    t,
+                )
+            )
+            score = float(base) - (0.28 * float(neg_pos)) + (0.20 * float(neg_neg))
+            if " but " in t or " however " in t:
+                parts = re.split(r"\b(?:but|however)\b", t, maxsplit=1)
+                if len(parts) == 2:
+                    tail = self._kw_score(parts[1], self.EN_POS, self.EN_NEG)
+                    score = (0.35 * score) + (0.65 * tail)
+
+        intensity = 1.0 + min(0.25, 0.06 * float(intensifier_hits))
+        uncertainty_penalty = min(0.25, 0.05 * float(hedge_hits))
+        score = self._clip(score * intensity, -1.0, 1.0)
+        confidence = self._clip(
+            0.28 + (0.54 * abs(score)) + (0.04 * float(intensifier_hits)) - uncertainty_penalty,
+            0.05,
+            0.99,
+        )
+        return float(score), float(confidence)
+
+    def _fit_text_embedder(
+        self,
+        rows: list[NewsArticle],
+        *,
+        max_features: int = 6000,
+        embedding_dim: int = 128,
+    ) -> tuple[bool, str]:
+        """Fit and persist TF-IDF + SVD embedder for semantic retrieval."""
+        if not _SKLEARN_TEXT_AVAILABLE:
+            return False, "sklearn text stack unavailable"
+        texts = []
+        for row in list(rows or []):
+            title = str(getattr(row, "title", "") or "").strip()
+            content = str(getattr(row, "content", "") or "").strip()
+            if not (title or content):
+                continue
+            texts.append(f"{title}\n{content[:1800]}")
+        dedup = list(dict.fromkeys(texts))
+        if len(dedup) < 12:
+            return False, f"insufficient texts for embedder ({len(dedup)})"
+
+        try:
+            vectorizer = TfidfVectorizer(
+                lowercase=True,
+                strip_accents="unicode",
+                ngram_range=(1, 2),
+                max_features=max(512, int(max_features)),
+                min_df=1,
+                max_df=0.98,
+                sublinear_tf=True,
+            )
+            mat = vectorizer.fit_transform(dedup)
+            if mat.shape[0] < 4 or mat.shape[1] < 16:
+                return False, "embedder matrix too small"
+
+            max_comp = int(min(mat.shape[0] - 1, mat.shape[1] - 1, max(16, int(embedding_dim))))
+            if max_comp < 4:
+                return False, "embedder components too small"
+            svd = TruncatedSVD(n_components=max_comp, random_state=42)
+            svd.fit(mat)
+            self._emb = {
+                "version": 2,
+                "fitted_at": datetime.now().isoformat(),
+                "vectorizer": vectorizer,
+                "svd": svd,
+                "embedding_dim": int(max_comp),
+                "sample_count": int(len(dedup)),
+            }
+            self._save_embedder()
+            return True, f"fitted tfidf+svd embedder ({len(dedup)} texts, dim={max_comp})"
+        except Exception as exc:
+            return False, f"embedder fit failed: {exc}"
 
     def _load_pipeline(self) -> None:
         """No-op: transformers pipeline removed. Self-training only."""
@@ -1328,16 +1704,22 @@ class LLM_sentimentAnalyzer:
         )[:3200]
         language = self._detect_language(text)
 
-        # Self-training only: no pretrained transformers pipeline
-        # Use rule-based sentiment (always available)
+        # Self-training only: no external hosted model is required.
+        # We start from deterministic priors, then blend learned artifacts.
         tf_overall, tf_pos, tf_neg, tf_neu, tf_conf = 0.0, 0.0, 0.0, 1.0, 0.38
-        model_used = "rule"
+        semantic_score, semantic_conf = self._semantic_sentiment_score(text, language)
+        model_used = "rule+semantic"
 
-        feat = self._build_features(article, tf_overall, tf_conf, language)
+        feat = self._build_features(article, semantic_score, max(tf_conf, semantic_conf), language)
         rule = float(feat[1])
         policy = float(feat[2])
         market = float(feat[3])
-        overall = self._clip((0.72 * tf_overall) + (0.28 * rule), -1.0, 1.0)
+        overall = self._clip(
+            (0.45 * tf_overall) + (0.30 * rule) + (0.25 * semantic_score),
+            -1.0,
+            1.0,
+        )
+        tf_conf = self._clip(max(tf_conf, semantic_conf), 0.0, 1.0)
         hybrid_used = False
         moe_used = False
 
@@ -1540,8 +1922,15 @@ class LLM_sentimentAnalyzer:
         """
         if not self._async_processor:
             raise RuntimeError("Async processing not enabled")
-        
-        loop = asyncio.get_event_loop()
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError as exc:
+            raise RuntimeError(
+                "analyze_batch_async requires an active event loop; "
+                "use analyze_batch() from synchronous code"
+            ) from exc
+
         return loop.create_task(
             self._async_processor.analyze_batch(
                 self.analyze,
@@ -1866,6 +2255,8 @@ class LLM_sentimentAnalyzer:
             "sklearn.neural_network._multilayer_perceptron.MLPClassifier",
             "sklearn.preprocessing._data.StandardScaler",
             "sklearn.preprocessing._label.LabelBinarizer",
+            "sklearn.feature_extraction.text.TfidfVectorizer",
+            "sklearn.decomposition._truncated_svd.TruncatedSVD",
             "numpy.dtype",
             "numpy._core.multiarray.scalar",
             "numpy.core.multiarray.scalar",
@@ -1968,6 +2359,28 @@ class LLM_sentimentAnalyzer:
         try:
             with self._scaler_path.open("wb") as f:
                 pickle.dump(self._scaler, f)
+        except Exception:
+            pass
+
+    def _load_embedder(self) -> None:
+        self._emb = None
+        if self._embedder_path.exists():
+            loaded = self._safe_load_llm_pickle(
+                self._embedder_path, artifact_name="text embedder"
+            )
+            if (
+                isinstance(loaded, dict)
+                and loaded.get("vectorizer") is not None
+                and loaded.get("svd") is not None
+            ):
+                self._emb = loaded
+
+    def _save_embedder(self) -> None:
+        if self._emb is None:
+            return
+        try:
+            with self._embedder_path.open("wb") as f:
+                pickle.dump(self._emb, f)
         except Exception:
             pass
 
@@ -2392,7 +2805,7 @@ class LLM_sentimentAnalyzer:
             return articles
 
         try:
-            all_articles: list[tuple[NewsArticle, float, float]] = []
+            all_articles: list[tuple[NewsArticle, float, float, float]] = []
 
             with open(self._training_corpus_path, "r", encoding="utf-8") as f:
                 for line in f:
@@ -2434,8 +2847,9 @@ class LLM_sentimentAnalyzer:
                         # Recency score (newer = higher score)
                         age_hours = (datetime.now() - published_at).total_seconds() / 3600.0
                         recency_score = 1.0 / (1.0 + age_hours / 168.0)  # 1 week half-life
+                        finance_score = self._finance_focus_score(article)
 
-                        all_articles.append((article, relevance, recency_score))
+                        all_articles.append((article, relevance, recency_score, finance_score))
 
                     except Exception:
                         continue
@@ -2443,17 +2857,17 @@ class LLM_sentimentAnalyzer:
             # Sort by combined score (relevance + recency)
             if prefer_recent:
                 all_articles.sort(
-                    key=lambda x: (x[1] * 0.6 + x[2] * 0.4),
+                    key=lambda x: (x[1] * 0.45 + x[2] * 0.30 + x[3] * 0.25),
                     reverse=True,
                 )
             else:
                 all_articles.sort(
-                    key=lambda x: x[1],
+                    key=lambda x: (x[1] * 0.7 + x[3] * 0.3),
                     reverse=True,
                 )
 
             # Take top samples
-            for article, _, _ in all_articles[:max_samples]:
+            for article, _, _, _ in all_articles[:max_samples]:
                 articles.append(article)
 
         except Exception as exc:
@@ -2755,6 +3169,25 @@ class LLM_sentimentAnalyzer:
         sample_thresholds: list[float] = []
         labeling_notes: list[str] = []
 
+        raw_sentiment_hints: list[float] = []
+        for row in rows:
+            raw_val = self._safe_float(getattr(row, "sentiment_score", 0.0), 0.0)
+            if math.isfinite(raw_val):
+                raw_sentiment_hints.append(float(raw_val))
+
+        metadata_prob_style = False
+        if len(raw_sentiment_hints) >= 8:
+            lo = float(min(raw_sentiment_hints))
+            hi = float(max(raw_sentiment_hints))
+            metadata_prob_style = lo >= 0.0 and hi <= 1.0 and (hi - lo) >= 0.12
+        if metadata_prob_style:
+            labeling_notes.append(
+                "Detected [0,1] sentiment hints; converted to signed score space."
+            )
+
+        metadata_blended = 0
+        semantic_blended = 0
+
         for a in rows:
             lang = str(getattr(a, "language", "") or "")
             if not lang:
@@ -2772,17 +3205,91 @@ class LLM_sentimentAnalyzer:
                 self.ZH_POS if lang == "zh" else self.EN_POS,
                 self.ZH_NEG if lang == "zh" else self.EN_NEG,
             )
-            sample_score = float(base)
-            sample_conf = self._clip(0.35 + (0.45 * abs(sample_score)), 0.05, 0.95)
-            threshold = 0.08
+            semantic_score, semantic_conf = self._semantic_sentiment_score(text, lang)
+            rule_score = self._clip(
+                (0.42 * float(base)) + (0.58 * float(semantic_score)),
+                -1.0,
+                1.0,
+            )
+            if abs(float(semantic_score) - float(base)) >= 0.35:
+                semantic_blended += 1
+
+            raw_meta = self._safe_float(getattr(a, "sentiment_score", 0.0), 0.0)
+            if metadata_prob_style:
+                meta_score = self._clip((2.0 * raw_meta) - 1.0, -1.0, 1.0)
+            else:
+                meta_score = self._clip(raw_meta, -1.0, 1.0)
+            meta_conf = self._clip(abs(meta_score), 0.0, 1.0)
+            relevance_hint = self._clip(
+                self._safe_float(getattr(a, "relevance_score", 0.5), 0.5), 0.0, 1.0
+            )
+
+            blend_weight = 0.0
+            if meta_conf >= 0.08:
+                blend_weight = self._clip(
+                    0.15
+                    + (0.35 * meta_conf)
+                    + (0.14 * relevance_hint)
+                    + (0.16 * semantic_conf),
+                    0.0,
+                    0.72,
+                )
+                if (
+                    float(rule_score) * float(meta_score) < 0.0
+                    and abs(float(rule_score)) >= 0.45
+                    and abs(float(meta_score)) >= 0.25
+                ):
+                    blend_weight *= 0.45
+
+            sample_score = self._clip(
+                ((1.0 - blend_weight) * float(rule_score))
+                + (blend_weight * float(meta_score)),
+                -1.0,
+                1.0,
+            )
+            if blend_weight > 0.0:
+                metadata_blended += 1
+
+            rule_conf = self._clip(
+                0.25 + (0.45 * abs(rule_score)) + (0.20 * semantic_conf),
+                0.05,
+                0.99,
+            )
+            sample_conf = self._clip(
+                (0.45 * rule_conf)
+                + (0.30 * semantic_conf)
+                + (0.15 * meta_conf)
+                + (0.10 * relevance_hint),
+                0.05,
+                0.98,
+            )
+            threshold = self._clip(
+                0.05
+                + (0.07 * (1.0 - sample_conf))
+                + (0.01 if abs(sample_score) < 0.10 else 0.0),
+                0.035,
+                0.14,
+            )
 
             x.append(
                 self._build_features(
-                    a, tf_overall=sample_score, tf_conf=sample_conf, language=lang
+                    a,
+                    tf_overall=sample_score,
+                    tf_conf=max(sample_conf, semantic_conf),
+                    language=lang,
                 )
             )
             sample_scores.append(float(sample_score))
             sample_thresholds.append(float(threshold))
+
+        if metadata_blended > 0:
+            labeling_notes.append(
+                f"Blended article sentiment metadata for {metadata_blended}/{len(rows)} samples."
+            )
+        if semantic_blended > 0:
+            labeling_notes.append(
+                f"Semantic priors adjusted {semantic_blended}/{len(rows)} samples."
+            )
 
         x_raw_arr = np.asarray(x, dtype=float)
         x_arr = np.asarray(x_raw_arr, dtype=float)
@@ -2839,7 +3346,15 @@ class LLM_sentimentAnalyzer:
             except Exception as exc:
                 notes.append(f"Feature scaling failed: {exc}")
 
-        train_idx, val_idx = self._split_train_validation_indices(y_arr, validation_split)
+        train_idx, val_idx, split_strategy = self._split_train_validation_temporal(
+            rows,
+            y_arr,
+            validation_split,
+        )
+        if split_strategy == "temporal":
+            notes.append("Validation split uses latest-timestamp holdout (temporal split).")
+        elif split_strategy == "random_fallback":
+            notes.append("Temporal split unavailable; used deterministic random holdout.")
         x_train, x_val = x_arr[train_idx], x_arr[val_idx]
         x_raw_train, x_raw_val = x_raw_arr[train_idx], x_raw_arr[val_idx]
         y_train, y_val = y_arr[train_idx], y_arr[val_idx]
@@ -3093,6 +3608,18 @@ class LLM_sentimentAnalyzer:
         }
         self._save_moe_model()
 
+        embedder_fit_ok = False
+        embedder_fit_note = "embedder fit skipped"
+        if len(rows) >= 12:
+            embedder_fit_ok, embedder_fit_note = self._fit_text_embedder(rows)
+            if embedder_fit_ok:
+                notes.append(f"Text embedder ready: {embedder_fit_note}")
+            else:
+                notes.append(f"Text embedder skipped: {embedder_fit_note}")
+        else:
+            embedder_fit_note = f"insufficient texts for embedder ({len(rows)})"
+            notes.append(f"Text embedder skipped: {embedder_fit_note}")
+
         status = "trained" if moe_ready else ("partial" if len(rows) > 0 else "skipped")
         architecture = "mixture_of_experts" if moe_ready else "rule_based_fallback"
 
@@ -3123,6 +3650,12 @@ class LLM_sentimentAnalyzer:
             "transformer_labels_requested": transformer_requested,
             "transformer_ready": transformer_ready,
             "class_distribution": class_distribution,
+            "embedder_ready": bool(isinstance(self._emb, dict)),
+            "embedder_fit_ok": bool(embedder_fit_ok),
+            "embedder_note": str(embedder_fit_note),
+            "embedding_backend": (
+                "tfidf_svd" if isinstance(self._emb, dict) else "hash_fallback"
+            ),
         }
         self._write_training_status(out)
         return out
@@ -3377,21 +3910,44 @@ class LLM_sentimentAnalyzer:
 
     @staticmethod
     def _build_corpus_queries(date_token: str) -> list[list[str]]:
-        """Build diverse query set for broad LLM corpus coverage.
+        """Build corpus query groups.
 
-        Enhanced to collect diverse training data types:
-        1. Web Text/Crawled Data - General knowledge, language patterns
-        2. Books & Literature - Long-form coherence, narrative structure
-        3. Academic & Scientific Papers - Technical knowledge, research
-        4. News Articles - Current events, journalistic writing
-        5. Social Media & Forums - Conversational language, contemporary slang
-        6. Specialized Domain Data - Expert knowledge (finance, law, medicine, tech)
-
-        Bilingual: Includes both Chinese and English queries for comprehensive coverage.
-        Ethical: Only uses publicly available search terms.
-        Diverse: Covers multiple knowledge domains and writing styles.
-        China-optimized: All queries work with China-accessible sources.
+        Default mode is finance-first to reduce noisy non-market data.
+        Set TRADING_LLM_CORPUS_BROAD=1 to enable broad-domain crawling queries.
         """
+        if not bool(env_flag("TRADING_LLM_CORPUS_BROAD", "0")):
+            focused_queries = [
+                ["A 股", "政策", "监管", date_token],
+                ["央行", "人民币", "降准", "降息", date_token],
+                ["沪深", "板块", "资金流向", date_token],
+                ["上市公司", "业绩", "回购", "增持", date_token],
+                ["财报", "盈利", "营收", "指引", date_token],
+                ["北向资金", "机构持仓", "产业链", date_token],
+                ["宏观经济", "GDP", "CPI", "PPI", date_token],
+                ["利率", "债券", "信用利差", date_token],
+                ["原油", "黄金", "大宗商品", date_token],
+                ["科技股", "新能源", "医药", "消费", date_token],
+                ["stock market news", "equity strategy", date_token],
+                ["central bank", "interest rates", "inflation", date_token],
+                ["corporate earnings", "guidance", "cash flow", date_token],
+                ["macro economy", "GDP CPI jobs data", date_token],
+                ["bond yield", "credit spread", "liquidity", date_token],
+                ["sector rotation", "risk-on risk-off", date_token],
+                ["a-share market", "policy", "regulation", date_token],
+                ["futures market", "positioning", "volatility", date_token],
+                ["forex market", "dollar index", "yuan", date_token],
+                ["merger acquisition", "ipo", "listing", date_token],
+            ]
+            seen_focused: set[tuple[str, ...]] = set()
+            dedup_focused: list[list[str]] = []
+            for row in focused_queries:
+                key = tuple(str(v) for v in row)
+                if key in seen_focused:
+                    continue
+                seen_focused.add(key)
+                dedup_focused.append([str(v) for v in row])
+            return dedup_focused
+
         queries = [
             # =====================================================================
             # CATEGORY 1: News Articles & Journalism (Chinese + English)
@@ -4054,6 +4610,25 @@ class LLM_sentimentAnalyzer:
                     prioritized.append(hist_article)
             training_articles = _dedupe_articles(prioritized)[:max_samples]
 
+        # Keep the final training batch finance-focused while preserving diversity.
+        if training_articles:
+            training_articles = self._select_finance_balanced_articles(
+                training_articles,
+                max_samples=max_samples,
+                target_finance_ratio=0.75,
+            )
+
+        finance_focus_count = int(
+            sum(
+                1
+                for row in training_articles
+                if self._finance_focus_score(row) >= 0.45
+            )
+        )
+        finance_focus_ratio = float(
+            finance_focus_count / max(1, len(training_articles))
+        )
+
         # Step 4: Save new articles to persistent corpus (FIX)
         save_stats: dict[str, Any] = {}
         if accumulate_training_data and collected_new_articles:
@@ -4090,6 +4665,8 @@ class LLM_sentimentAnalyzer:
         report["fallback_articles"] = len(fallback_articles)
         report["historical_articles"] = len(historical_articles)
         report["total_training_articles"] = len(training_articles)
+        report["finance_focus_count"] = finance_focus_count
+        report["finance_focus_ratio"] = finance_focus_ratio
         report["used_historical_fallback"] = bool(used_historical_fallback)
         report["collection_stats"] = collection_stats
         report["query_count"] = int(
@@ -4179,7 +4756,7 @@ class LLM_sentimentAnalyzer:
         dimension: int = 96,
         sparse: bool = False,
     ) -> list[float] | dict[int, float]:
-        """Get text embedding using rule-based hashing (self-trained).
+        """Get text embedding using fitted self-trained embedder or hash fallback.
         
         Features:
         - Memory-efficient sparse representation option
@@ -4187,10 +4764,9 @@ class LLM_sentimentAnalyzer:
         - Automatic text truncation for long inputs
         - Character-level and token-level features
         
-        Note: sentence-transformers removed. All embeddings are now:
-        - Rule-based hash embeddings (always available)
-        - Self-trained during your training process
-        No pretrained models are loaded.
+        Priority:
+        1. Fitted TF-IDF + SVD embedder from local training.
+        2. Deterministic hash embedding fallback (always available).
         
         Args:
             text: Input text to embed
@@ -4201,50 +4777,76 @@ class LLM_sentimentAnalyzer:
             Dense list[float] or sparse dict[int, float]
         """
         text = str(text or "")
-        
+        target_dim = int(max(8, int(dimension)))
+
         # Truncate very long texts for memory efficiency
         max_text_len = 2000
         if len(text) > max_text_len:
-            # Keep beginning and end for context
-            text = text[:max_text_len // 2] + text[-max_text_len // 2:]
-        
-        # Use sparse representation for memory efficiency
+            text = text[: max_text_len // 2] + text[-max_text_len // 2 :]
+
+        # Preferred path: use fitted TF-IDF + SVD embedder when available.
+        emb = self._emb if isinstance(self._emb, dict) else None
+        if emb is not None:
+            try:
+                vectorizer = emb.get("vectorizer")
+                svd = emb.get("svd")
+                if vectorizer is not None and svd is not None:
+                    tfidf = vectorizer.transform([text])
+                    dense = np.asarray(svd.transform(tfidf)[0], dtype=float).reshape(-1)
+                    if dense.size > 0:
+                        vec = dense
+                        if vec.size != target_dim:
+                            projected = np.zeros(target_dim, dtype=float)
+                            for i, v in enumerate(vec.tolist()):
+                                idx = int(i % target_dim)
+                                sign = 1.0 if ((i // target_dim) % 2 == 0) else -1.0
+                                projected[idx] += float(v) * sign
+                            vec = projected
+                        norm = float(np.linalg.norm(vec))
+                        if norm > 0:
+                            vec = vec / norm
+                        if sparse:
+                            return {
+                                int(i): float(v)
+                                for i, v in enumerate(vec.tolist())
+                                if abs(float(v)) > 1e-12
+                            }
+                        return [float(v) for v in vec.tolist()]
+            except Exception:
+                pass
+
+        # Fallback path: deterministic hash embedding.
         sparse_vec: dict[int, float] = {}
-        
-        # Token-level features
+
         tokens = re.findall(r"[a-zA-Z0-9\u4e00-\u9fff]+", text.lower())
         for tok in tokens:
-            idx = hash(tok) % dimension
+            idx = hash(tok) % target_dim
             sparse_vec[idx] = sparse_vec.get(idx, 0.0) + 1.0
-        
-        # Character n-gram features (for better semantic capture)
+
         for n in [2, 3]:
             for i in range(len(text) - n + 1):
-                ngram = text[i:i + n]
-                idx = hash(ngram) % dimension
+                ngram = text[i : i + n]
+                idx = hash(ngram) % target_dim
                 sparse_vec[idx] = sparse_vec.get(idx, 0.0) + 0.5
-        
-        # Language-specific features
+
         zh_count = len(re.findall(r"[\u4e00-\u9fff]", text))
         en_count = len(re.findall(r"[a-zA-Z]", text))
         if zh_count > 0:
             sparse_vec[0] = sparse_vec.get(0, 0.0) + zh_count / max(1, len(text))
-        if en_count > 0:
+        if en_count > 0 and target_dim > 1:
             sparse_vec[1] = sparse_vec.get(1, 0.0) + en_count / max(1, len(text))
-        
+
         if sparse:
             return sparse_vec
-        
-        # Convert to dense representation
-        vec = np.zeros(dimension, dtype=float)
+
+        vec = np.zeros(target_dim, dtype=float)
         for idx, val in sparse_vec.items():
-            vec[idx] = val
-        
-        # L2 normalization
-        n = float(np.linalg.norm(vec))
-        if n > 0:
-            vec /= n
-        
+            vec[int(idx)] = float(val)
+
+        norm = float(np.linalg.norm(vec))
+        if norm > 0:
+            vec = vec / norm
+
         return [float(v) for v in vec.tolist()]
     
     def get_embedding_batch(

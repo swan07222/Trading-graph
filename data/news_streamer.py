@@ -254,7 +254,7 @@ class NewsStreamer:
         from data.news_collector import NewsArticle
         
         # Run blocking collector in executor
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         
         def fetch():
             return self._collector.collect_news(

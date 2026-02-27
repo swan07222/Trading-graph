@@ -481,24 +481,48 @@ class PredictionQualityAssessor:
             
             n_samples = input_data.shape[0]
             n_features = min(len(feature_names), input_data.shape[1])
+            eps = 1e-10
+            prob_array = np.asarray(probabilities)
+
+            # When per-sample probabilities are available, correlate each feature
+            # with the predicted-class confidence across samples.
+            target_scores: np.ndarray | None = None
+            if prob_array.ndim == 2 and prob_array.shape[0] == n_samples and prob_array.shape[1] > 0:
+                mean_probs = np.mean(prob_array, axis=0)
+                pred_class = int(np.argmax(mean_probs))
+                target_scores = prob_array[:, pred_class]
+            elif prob_array.ndim >= 1 and prob_array.size > 0:
+                pred_class = int(np.argmax(prob_array.reshape(-1)))
+            else:
+                pred_class = 0
+
+            if n_features == 0:
+                fi.summary = "No features available"
+                return fi
             
             if n_samples < 2:
                 fi.importance_scores = np.abs(input_data[0, :n_features])
             else:
-                pred_class = int(np.argmax(probabilities))
                 for i in range(n_features):
                     feat = input_data[:, i]
-                    if np.std(feat) > 1e-10:
-                        corr = np.corrcoef(feat, np.ones(n_samples) * pred_class)[0, 1]
+
+                    if (
+                        target_scores is not None and
+                        np.std(feat) > eps and
+                        np.std(target_scores) > eps
+                    ):
+                        corr = np.corrcoef(feat, target_scores)[0, 1]
                         if np.isfinite(corr):
                             fi.importance_scores[i] = abs(corr)
                         else:
                             fi.importance_scores[i] = 0.0
                     else:
-                        fi.importance_scores[i] = abs(np.mean(feat)) / (abs(np.std(feat)) + 1e-10)
+                        # Fallback when only aggregated class probabilities are available.
+                        feat_mean = float(np.mean(feat))
+                        fi.importance_scores[i] = float(np.mean(np.abs(feat - feat_mean)))
             
             total = np.sum(fi.importance_scores)
-            if total > 1e-10:
+            if total > eps:
                 fi.importance_scores = fi.importance_scores / total
             else:
                 fi.importance_scores = np.ones(n_features) / n_features
@@ -518,16 +542,26 @@ class PredictionQualityAssessor:
                 ]
             
             if n_samples > 2:
-                pred_class = int(np.argmax(probabilities))
                 for i in range(n_features):
                     feat = input_data[:, i]
-                    if np.std(feat) > 1e-10:
-                        corr = np.corrcoef(feat, np.ones(n_samples) * pred_class)[0, 1]
+                    feat_std = float(np.std(feat))
+                    if (
+                        target_scores is not None and
+                        feat_std > eps and
+                        np.std(target_scores) > eps
+                    ):
+                        corr = np.corrcoef(feat, target_scores)[0, 1]
                         if np.isfinite(corr):
                             if corr > 0.1:
                                 fi.positive_influence.append(feature_names[i])
                             elif corr < -0.1:
                                 fi.negative_influence.append(feature_names[i])
+                    elif feat_std > eps:
+                        z_last = (float(feat[-1]) - float(np.mean(feat))) / feat_std
+                        if z_last > 0.5:
+                            fi.positive_influence.append(feature_names[i])
+                        elif z_last < -0.5:
+                            fi.negative_influence.append(feature_names[i])
             
             self._recent_importance.append(fi.importance_scores.copy())
             if len(self._recent_importance) > self._importance_window:
