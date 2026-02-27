@@ -1275,11 +1275,7 @@ def _generate_ai_chat_reply_enhanced(
     memory_context: str = "",
     intent_match: IntentMatch | None = None,
 ) -> dict[str, Any]:
-    """Enhanced reply generation with memory context and retry.
-    
-    Note: This uses your self-trained model from llm_sentiment.py.
-    No pre-trained models (llama/ollama/transformers) are used.
-    """
+    """Enhanced reply generation with memory context and local transformer chat."""
     try:
         from data.llm_sentiment import get_llm_analyzer
 
@@ -1340,12 +1336,15 @@ def _start_llm_training_enhanced(self: Any) -> None:
 
     self._append_ai_chat_message(
         "System",
-        f"Starting optimized LLM training (max {LLM_TRAINING_MAX_ARTICLES} articles)...",
+        (
+            "Starting optimized LLM training "
+            f"(max {LLM_TRAINING_MAX_ARTICLES} articles, includes self-chat model)..."
+        ),
         role="system",
         level="info",
     )
     if hasattr(self, "log"):
-        self.log("Starting optimized LLM hybrid training...", "info")
+        self.log("Starting optimized LLM training with self-chat model...", "info")
 
     def _work() -> dict[str, Any]:
         from data.llm_sentiment import get_llm_analyzer
@@ -1353,6 +1352,11 @@ def _start_llm_training_enhanced(self: Any) -> None:
 
         analyzer = get_llm_analyzer()
         collector = get_collector()
+        chat_report = analyzer.train_chat_model(
+            chat_history_path="data/chat_history/chat_history.json",
+            max_steps=800,
+            epochs=1,
+        )
         
         # Reduced article count for faster training
         articles = collector.collect_news(limit=LLM_TRAINING_MAX_ARTICLES, hours_back=72)
@@ -1363,6 +1367,12 @@ def _start_llm_training_enhanced(self: Any) -> None:
             report.setdefault("collected_articles", int(len(articles)))
             report.setdefault("new_articles", int(len(articles)))
             report.setdefault("collection_mode", "direct_news")
+            report["chat_model_status"] = str(chat_report.get("status", "unknown") or "unknown")
+            report["chat_model_steps"] = int(chat_report.get("steps", 0) or 0)
+            report["chat_model_dir"] = str(chat_report.get("model_dir", "") or "")
+            chat_note = str(chat_report.get("message", "") or "").strip()
+            if chat_note:
+                report["notes"] = f"{str(report.get('notes', '')).strip()} | chat={chat_note}".strip(" |")
             return report
 
         report = analyzer.auto_train_from_internet(
@@ -1377,6 +1387,12 @@ def _start_llm_training_enhanced(self: Any) -> None:
         )
         out = dict(report or {})
         out.setdefault("collection_mode", "auto_internet_fallback")
+        out["chat_model_status"] = str(chat_report.get("status", "unknown") or "unknown")
+        out["chat_model_steps"] = int(chat_report.get("steps", 0) or 0)
+        out["chat_model_dir"] = str(chat_report.get("model_dir", "") or "")
+        chat_note = str(chat_report.get("message", "") or "").strip()
+        if chat_note:
+            out["notes"] = f"{str(out.get('notes', '')).strip()} | chat={chat_note}".strip(" |")
         return out
 
     worker = WorkerThread(_work, timeout_seconds=LLM_TRAINING_TIMEOUT)
@@ -1406,7 +1422,8 @@ def _start_llm_training_enhanced(self: Any) -> None:
             f"zh={payload.get('zh_samples', 0)}, en={payload.get('en_samples', 0)}, "
             f"arch={payload.get('training_architecture', 'hybrid_neural_network')}, "
             f"collected={payload.get('collected_articles', payload.get('new_articles', 0))}, "
-            f"mode={payload.get('collection_mode', 'unknown')}."
+            f"mode={payload.get('collection_mode', 'unknown')}, "
+            f"chat_model={payload.get('chat_model_status', 'unknown')}."
         )
         
         notes = str(payload.get("notes", "") or "").strip()

@@ -51,6 +51,9 @@ _QUALITY_GATE_MIN_WALK_STABILITY = 0.35
 _CALIBRATION_BINS = 12
 _CALIBRATION_MIN_SAMPLES = 120
 _CALIBRATION_MIN_BIN_SAMPLES = 8
+_CALIBRATION_WEAK_MIN_RELIABILITY = 0.12
+_CALIBRATION_WEAK_MAX_RELIABILITY = 0.85
+_CALIBRATION_WEAK_BASE_SPREAD = 0.08
 
 
 def _clip_confidences(values: np.ndarray | list[float] | tuple[float, ...]) -> np.ndarray:
@@ -175,6 +178,9 @@ def _build_confidence_calibration(
         "brier_after": 0.0,
         "ece_improvement": 0.0,
         "brier_improvement": 0.0,
+        "reliability_score": 0.0,
+        "weak_validation": False,
+        "min_samples_required": int(_CALIBRATION_MIN_SAMPLES),
     }
 
     if (
@@ -188,12 +194,6 @@ def _build_confidence_calibration(
         return report
 
     n_raw = int(min(len(X_cal), len(y_cal)))
-    if n_raw < int(_CALIBRATION_MIN_SAMPLES):
-        report["reason"] = (
-            f"insufficient_samples (need>={_CALIBRATION_MIN_SAMPLES}, got={n_raw})"
-        )
-        return report
-
     sample_cap = 2500
     n = int(min(n_raw, sample_cap))
     X_eval = X_cal[-n:]
@@ -212,10 +212,8 @@ def _build_confidence_calibration(
         [float(getattr(p, "confidence", 0.5)) for p in predictions]
     )
     min_len = int(min(len(pred_classes), len(raw_conf), len(y_eval)))
-    if min_len < int(_CALIBRATION_MIN_SAMPLES):
-        report["reason"] = (
-            f"insufficient_predictions (need>={_CALIBRATION_MIN_SAMPLES}, got={min_len})"
-        )
+    if min_len <= 0:
+        report["reason"] = "insufficient_predictions (got=0)"
         return report
 
     pred_classes = pred_classes[:min_len]
@@ -223,6 +221,79 @@ def _build_confidence_calibration(
     y_eval = y_eval[:min_len]
     correct = (pred_classes == y_eval).astype(np.float64)
     report["sample_count"] = int(min_len)
+
+    if min_len < int(_CALIBRATION_MIN_SAMPLES):
+        weak_ratio = float(
+            np.clip(
+                float(min_len) / float(max(1, int(_CALIBRATION_MIN_SAMPLES))),
+                0.0,
+                1.0,
+            )
+        )
+        conf_std = float(np.std(raw_conf))
+        conf_diversity = float(np.clip(conf_std / 0.18, 0.0, 1.0))
+        reliability = float(
+            np.clip(
+                _CALIBRATION_WEAK_MIN_RELIABILITY
+                + (0.55 * weak_ratio)
+                + (0.20 * conf_diversity),
+                _CALIBRATION_WEAK_MIN_RELIABILITY,
+                _CALIBRATION_WEAK_MAX_RELIABILITY,
+            )
+        )
+        empirical_acc = float(np.clip(np.mean(correct), 0.0, 1.0))
+        center = float((0.65 * empirical_acc) + (0.35 * 0.50))
+        spread = float(
+            np.clip(
+                _CALIBRATION_WEAK_BASE_SPREAD + (0.22 * reliability),
+                0.10,
+                0.34,
+            )
+        )
+        lo = float(np.clip(center - (spread * 0.5), 0.20, 0.80))
+        hi = float(np.clip(center + (spread * 0.5), max(lo + 0.02, 0.22), 0.92))
+
+        calibrated = np.interp(
+            raw_conf,
+            np.asarray([0.0, 1.0], dtype=np.float64),
+            np.asarray([lo, hi], dtype=np.float64),
+        )
+        calibrated = _clip_confidences(calibrated)
+        ece_before = _expected_calibration_error(raw_conf, correct)
+        ece_after = _expected_calibration_error(calibrated, correct)
+        brier_before = float(np.mean(np.square(raw_conf - correct)))
+        brier_after = float(np.mean(np.square(calibrated - correct)))
+
+        report.update(
+            {
+                "enabled": True,
+                "reason": "weak_validation_fallback",
+                "used_bins": 1,
+                "x_points": [0.0, 1.0],
+                "y_points": [float(lo), float(hi)],
+                "mapping_points": [
+                    {
+                        "raw_confidence": 0.0,
+                        "calibrated_confidence": float(lo),
+                        "samples": int(min_len),
+                    },
+                    {
+                        "raw_confidence": 1.0,
+                        "calibrated_confidence": float(hi),
+                        "samples": 0,
+                    },
+                ],
+                "ece_before": float(ece_before),
+                "ece_after": float(ece_after),
+                "brier_before": float(brier_before),
+                "brier_after": float(brier_after),
+                "ece_improvement": float(ece_before - ece_after),
+                "brier_improvement": float(brier_before - brier_after),
+                "reliability_score": float(reliability),
+                "weak_validation": True,
+            }
+        )
+        return report
 
     conf_std = float(np.std(raw_conf))
     if conf_std <= 1e-6:
@@ -257,6 +328,21 @@ def _build_confidence_calibration(
                 "brier_after": float(brier_after),
                 "ece_improvement": float(ece_before - ece_after),
                 "brier_improvement": float(brier_before - brier_after),
+                "reliability_score": float(
+                    np.clip(
+                        0.45
+                        + (
+                            0.40
+                            * (
+                                float(min_len)
+                                / float(max(1, int(_CALIBRATION_MIN_SAMPLES * 2)))
+                            )
+                        ),
+                        0.45,
+                        0.88,
+                    )
+                ),
+                "weak_validation": False,
             }
         )
         return report
@@ -387,6 +473,32 @@ def _build_confidence_calibration(
     ece_after = _expected_calibration_error(calibrated, correct)
     brier_before = float(np.mean(np.square(raw_conf - correct)))
     brier_after = float(np.mean(np.square(calibrated - correct)))
+    sample_strength = float(
+        np.clip(
+            float(min_len) / float(max(1, int(_CALIBRATION_MIN_SAMPLES * 2))),
+            0.0,
+            1.0,
+        )
+    )
+    bin_support = float(
+        np.clip(
+            float(len(usable_bins)) / float(max(2, int(_CALIBRATION_BINS))),
+            0.0,
+            1.0,
+        )
+    )
+    ece_gain = float(np.clip(ece_before - ece_after, -0.25, 0.25))
+    ece_gain_score = float(np.clip((ece_gain + 0.02) / 0.10, 0.0, 1.0))
+    reliability = float(
+        np.clip(
+            0.35
+            + (0.35 * sample_strength)
+            + (0.20 * bin_support)
+            + (0.10 * ece_gain_score),
+            0.0,
+            1.0,
+        )
+    )
 
     count_lookup = {
         round(float(conf), 6): int(cnt)
@@ -416,6 +528,8 @@ def _build_confidence_calibration(
             "brier_after": float(brier_after),
             "ece_improvement": float(ece_before - ece_after),
             "brier_improvement": float(brier_before - brier_after),
+            "reliability_score": float(reliability),
+            "weak_validation": False,
         }
     )
     return report

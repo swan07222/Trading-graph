@@ -219,9 +219,14 @@ class NewsCollector:
         if strict_mode and not articles:
             raise RuntimeError("Strict news collection returned no articles")
         if articles:
-            log.info(f"Collected {len(articles)} unique articles")
+            source_count = len({str(getattr(a, "source", "") or "").strip() for a in articles})
+            log.debug(
+                "Collected %d unique articles from %d sources",
+                len(articles),
+                source_count,
+            )
         else:
-            log.debug(f"Collected 0 unique articles")
+            log.debug("Collected 0 unique articles")
         return articles
 
     def _source_cooldown_seconds(self, source: str) -> float:
@@ -278,9 +283,26 @@ class NewsCollector:
             return True
 
     @staticmethod
+    def _repair_mojibake(value: object) -> str:
+        """Repair common UTF-8/Latin-1 mojibake from mixed news endpoints."""
+        text = str(value or "")
+        if not text:
+            return ""
+        suspicious = any(ch in text for ch in ("Ã", "Â", "æ", "ç", "è", "é", "å", "ä"))
+        if not suspicious:
+            return text
+        try:
+            repaired = text.encode("latin-1").decode("utf-8")
+        except Exception:
+            return text
+        if repaired and repaired != text:
+            return repaired
+        return text
+
+    @staticmethod
     def _clean_text(value: object) -> str:
         """Normalize text payload from mixed HTML/JSON content."""
-        text = str(value or "")
+        text = NewsCollector._repair_mojibake(value)
         if not text:
             return ""
         text = re.sub(r"<[^>]+>", " ", text)
@@ -500,61 +522,243 @@ class NewsCollector:
         start_time: datetime,
         limit: int,
     ) -> list[NewsArticle]:
-        """Fetch from Sina Finance."""
-        articles = []
-        url = "https://feed.mix.sina.com.cn/api/roll/feed"
-        
-        try:
-            params = {
-                "page": 1,
-                "page_size": limit,
-                "cid": "1",
-            }
-            resp = self._session.get(url, params=params, timeout=10)
-            resp.raise_for_status()
-            data = self._decode_json_payload(resp.text)
-            
-            if not data or not isinstance(data, dict):
-                return []
+        """Fetch from Sina Finance with endpoint rotation and HTML fallback."""
+        _ = keywords
+        endpoint_specs = [
+            (
+                "https://feed.mix.sina.com.cn/api/roll/feed",
+                {"page": 1, "page_size": max(20, int(limit)), "cid": "1"},
+            ),
+            (
+                "https://feed.mix.sina.com.cn/api/roll/get",
+                {"pageid": "153", "lid": "2510", "num": max(20, int(limit)), "page": 1},
+            ),
+            (
+                "https://feed.mix.sina.com.cn/api/roll/get",
+                {"pageid": "153", "lid": "2509", "num": max(20, int(limit)), "page": 1},
+            ),
+        ]
 
-            result = data.get("result", {})
-            items = result.get("data", []) if isinstance(result, dict) else []
-            
-            for item in items[:limit]:
-                title = self._clean_text(item.get("title", ""))
-                content = self._clean_text(item.get("content", ""))
-                if not title:
+        endpoint_errors: list[str] = []
+        for url, params in endpoint_specs:
+            try:
+                resp = self._session.get(url, params=params, timeout=10)
+                if int(getattr(resp, "status_code", 0) or 0) == 404:
+                    endpoint_errors.append(f"{url} HTTP 404")
+                    continue
+                resp.raise_for_status()
+                data = self._decode_json_payload(getattr(resp, "text", ""))
+                items = self._extract_sina_feed_items(data)
+                if not items:
+                    endpoint_errors.append(f"{url} empty_feed")
+                    continue
+                articles = self._parse_sina_articles(
+                    items=items,
+                    start_time=start_time,
+                    limit=limit,
+                )
+                if articles:
+                    self._update_source_health("sina_finance", success=True)
+                    return articles[:limit]
+                endpoint_errors.append(f"{url} no_recent_rows")
+            except Exception as exc:
+                endpoint_errors.append(f"{url} {exc}")
+
+        html_fallback = self._fetch_sina_finance_html_fallback(
+            keywords=keywords,
+            start_time=start_time,
+            limit=limit,
+        )
+        if html_fallback:
+            self._update_source_health("sina_finance", success=True)
+            return html_fallback[:limit]
+
+        if endpoint_errors:
+            log.warning(
+                "Sina Finance fetch failed: %s",
+                "; ".join(endpoint_errors[:2]),
+            )
+        self._update_source_health("sina_finance", success=False)
+        return []
+
+    def _extract_sina_feed_items(self, payload: object) -> list[dict[str, Any]]:
+        """Extract Sina news rows from variant JSON response shapes."""
+        if isinstance(payload, list):
+            return [row for row in payload if isinstance(row, dict)]
+        if not isinstance(payload, dict):
+            return []
+
+        def _coerce_rows(value: object) -> list[dict[str, Any]]:
+            if isinstance(value, list):
+                return [row for row in value if isinstance(row, dict)]
+            return []
+
+        containers: list[dict[str, Any]] = [payload]
+        for key in ("result", "data"):
+            value = payload.get(key)
+            if isinstance(value, dict):
+                containers.append(value)
+
+        for container in containers:
+            for key in ("data", "list", "items", "feed", "roll_data", "result"):
+                rows = _coerce_rows(container.get(key))
+                if rows:
+                    return rows
+
+        return []
+
+    def _parse_sina_articles(
+        self,
+        *,
+        items: list[dict[str, Any]],
+        start_time: datetime,
+        limit: int,
+    ) -> list[NewsArticle]:
+        """Normalize Sina feed rows into NewsArticle objects."""
+        out: list[NewsArticle] = []
+        seen_ids: set[str] = set()
+        generic_titles = {
+            "home",
+            "homepage",
+            "login",
+            "logout",
+            "register",
+            "more",
+            "more...",
+            "首页",
+            "新浪首页",
+            "登录",
+            "注册",
+            "更多",
+        }
+        generic_urls = {
+            "http://www.sina.com.cn/",
+            "https://www.sina.com.cn/",
+            "http://sina.com.cn/",
+            "https://sina.com.cn/",
+        }
+
+        for item in list(items or []):
+            title = self._clean_text(
+                item.get("title", "")
+                or item.get("wap_title", "")
+                or item.get("title1", "")
+            )
+            content = self._clean_text(
+                item.get("content", "")
+                or item.get("intro", "")
+                or item.get("summary", "")
+                or item.get("k", "")
+            )
+            if not title:
+                continue
+            if len(title) < 4:
+                continue
+            if title.strip().lower() in generic_titles:
+                continue
+
+            published_at = None
+            for pub_key in (
+                "ctime",
+                "intime",
+                "pubtime",
+                "pubDate",
+                "time",
+                "datetime",
+                "created_at",
+                "create_time",
+            ):
+                published_at = self._parse_datetime(item.get(pub_key))
+                if published_at is not None:
+                    break
+            if published_at is None:
+                published_at = datetime.now()
+
+            if not self._is_recent_enough(published_at, start_time):
+                continue
+
+            raw_url = str(
+                item.get("url", "")
+                or item.get("wapurl", "")
+                or item.get("docurl", "")
+                or item.get("link", "")
+                or ""
+            ).strip()
+            if raw_url.startswith("//"):
+                raw_url = f"https:{raw_url}"
+            if not raw_url:
+                oid = str(item.get("oid", "") or "").strip().lstrip("/")
+                if oid:
+                    raw_url = f"https://finance.sina.com.cn/{oid}"
+            if raw_url in generic_urls:
+                continue
+            if raw_url:
+                raw_url_lower = raw_url.lower()
+                if "finance.sina.com.cn" not in raw_url_lower:
+                    continue
+                if (
+                    "doc-" not in raw_url_lower
+                    and "/roll/" not in raw_url_lower
+                    and "/20" not in raw_url_lower
+                ):
+                    continue
+                if "index.d.html" in raw_url_lower:
                     continue
 
-                pub_time = item.get("ctime", "")
-                published_at = self._parse_datetime(pub_time) or datetime.now()
-                
-                if not self._is_recent_enough(published_at, start_time):
-                    continue
-
-                article_id = self._generate_id(f"sina_{title}_{pub_time}")
-                
-                article = NewsArticle(
+            article_id = self._generate_id(
+                f"sina_{title}_{published_at.isoformat()}_{raw_url}"
+            )
+            if article_id in seen_ids:
+                continue
+            seen_ids.add(article_id)
+            out.append(
+                NewsArticle(
                     id=article_id,
                     title=title,
                     content=content or title,
                     summary=title[:200],
                     source="sina_finance",
-                    url=item.get("url", ""),
+                    url=raw_url,
                     published_at=published_at,
                     collected_at=datetime.now(),
                     language="zh",
                     category="market",
                 )
-                articles.append(article)
+            )
+            if len(out) >= max(1, int(limit)):
+                break
+        return out
 
-            self._update_source_health("sina_finance", success=True)
-            return articles[:limit]
-
-        except requests.RequestException as e:
-            log.warning(f"Sina Finance fetch failed: {e}")
-            self._update_source_health("sina_finance", success=False)
-            return []
+    def _fetch_sina_finance_html_fallback(
+        self,
+        keywords: list[str] | None,
+        start_time: datetime,
+        limit: int,
+    ) -> list[NewsArticle]:
+        """Fallback HTML extraction for Sina Finance when feed endpoints drift."""
+        _ = keywords
+        for url in (
+            "https://finance.sina.com.cn/china/",
+            "https://finance.sina.com.cn/stock/",
+            "https://finance.sina.com.cn/",
+        ):
+            try:
+                resp = self._session.get(url, timeout=10)
+                resp.raise_for_status()
+                rows = self._extract_html_anchor_articles(
+                    html_text=getattr(resp, "text", ""),
+                    source="sina_finance",
+                    base_url=url,
+                    start_time=start_time,
+                    limit=limit,
+                    keywords=keywords,
+                    category="market",
+                )
+                if rows:
+                    return rows[:limit]
+            except Exception:
+                continue
+        return []
 
     def _fetch_caixin(
         self,
@@ -688,6 +892,22 @@ class NewsCollector:
             re.IGNORECASE | re.DOTALL,
         )
         _ = keywords
+        generic_titles = {
+            "home",
+            "homepage",
+            "login",
+            "logout",
+            "register",
+            "more",
+            "more...",
+            "nav",
+            "首页",
+            "新浪首页",
+            "登录",
+            "注册",
+            "更多",
+            "返回顶部",
+        }
         for match in pattern.finditer(str(html_text or "")):
             if len(rows) >= max(1, int(limit)):
                 break
@@ -695,12 +915,45 @@ class NewsCollector:
             title = self._clean_text(match.group("title") or "")
             if not href or not title:
                 continue
+            href_lower = href.lower()
+            if (
+                href_lower.startswith("#")
+                or href_lower.startswith("javascript:")
+                or href_lower.startswith("mailto:")
+            ):
+                continue
+            if title.strip().lower() in generic_titles:
+                continue
+            if len(title) < 4:
+                continue
 
             published_at = datetime.now()
             if not self._is_recent_enough(published_at, start_time):
                 continue
 
             article_url = urljoin(base_url, href)
+            article_url_lower = article_url.lower()
+            looks_like_article = (
+                ".shtml" in article_url_lower
+                or ".html" in article_url_lower
+                or "/20" in article_url_lower
+                or "doc-" in article_url_lower
+                or "/article" in article_url_lower
+            )
+            if source == "sina_finance":
+                if "finance.sina.com.cn" not in article_url_lower:
+                    continue
+                if (
+                    "doc-" not in article_url_lower
+                    and "/roll/" not in article_url_lower
+                    and "/20" not in article_url_lower
+                ):
+                    continue
+                if "index.d.html" in article_url_lower:
+                    continue
+            if not looks_like_article and len(title) < 12:
+                continue
+
             article_id = self._generate_id(f"{source}_{title}_{article_url}")
             rows.append(
                 NewsArticle(

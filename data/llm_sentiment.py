@@ -774,7 +774,7 @@ class LLMSentimentResult:
 # ---------------------------------------------------------------------------
 
 class LLM_sentimentAnalyzer:
-    """Bilingual sentiment analyzer with hybrid neural calibration."""
+    """Bilingual sentiment analyzer with a self-trained MoE sentiment stack."""
 
     DEFAULT_MODEL = "cardiffnlp/twitter-xlm-roberta-base-sentiment"
     FALLBACK_MODEL = "distilbert-base-uncased-finetuned-sst-2-english"
@@ -793,6 +793,7 @@ class LLM_sentimentAnalyzer:
     ZH_MARKET_BEAR = ["熊市", "看空", "做空", "回调", "弱势"]
     EN_MARKET_BULL = ["bull market", "long", "breakout", "risk-on"]
     EN_MARKET_BEAR = ["bear market", "short", "breakdown", "risk-off"]
+    _CLASS_ORDER = np.asarray([-1, 0, 1], dtype=int)
 
     def __init__(
         self,
@@ -823,9 +824,11 @@ class LLM_sentimentAnalyzer:
         self._emb: Any = None  # Removed: sentence-transformers no longer used
         self._calibrator: Any = None
         self._hybrid_calibrator: Any = None
+        self._moe_model: Any = None
         self._scaler: Any = None
         self._calibrator_path = self.cache_dir / "llm_calibrator.pkl"
         self._hybrid_calibrator_path = self.cache_dir / "llm_hybrid_nn.pkl"
+        self._moe_path = self.cache_dir / "llm_moe.pkl"
         self._scaler_path = self.cache_dir / "llm_scaler.pkl"
         self._status_path = self.cache_dir / "llm_training_status.json"
         self._seen_article_path = self.cache_dir / "llm_seen_articles.json"
@@ -863,8 +866,11 @@ class LLM_sentimentAnalyzer:
         
         self._load_calibrator()
         self._load_hybrid_calibrator()
+        self._load_moe_model()
         self._load_scaler()
         self._load_seen_articles()
+        self._chat_llm: Any = None
+        self._chat_lock = threading.RLock()
 
     @staticmethod
     def _init_device(device: str | None, use_gpu: bool) -> str:
@@ -986,6 +992,167 @@ class LLM_sentimentAnalyzer:
             1.0 if language == "en" else 0.0,
             self._safe_float(getattr(article, "relevance_score", 0.5), 0.5),
         ]
+
+    def _rule_expert_probs(self, rule_score: float) -> np.ndarray:
+        """Map rule score to class probabilities in [-1, 0, 1] order."""
+        neg = max(0.0, -float(rule_score))
+        pos = max(0.0, float(rule_score))
+        neu = max(0.0, 1.0 - abs(float(rule_score)))
+        probs = np.asarray([neg, neu, pos], dtype=float) + 0.01
+        denom = float(np.sum(probs))
+        if denom <= 0:
+            return np.asarray([0.2, 0.6, 0.2], dtype=float)
+        return probs / denom
+
+    def _align_class_probs(
+        self,
+        probs: np.ndarray,
+        classes: list[int] | np.ndarray,
+        *,
+        default: np.ndarray | None = None,
+    ) -> np.ndarray:
+        """Align arbitrary classifier probability output to [-1,0,1] order."""
+        aligned = (
+            np.asarray(default, dtype=float).copy()
+            if default is not None
+            else np.zeros(3, dtype=float)
+        )
+        p_arr = np.asarray(probs, dtype=float).reshape(-1)
+        cls_arr = np.asarray(classes, dtype=int).reshape(-1)
+        for i, cls in enumerate(cls_arr.tolist()):
+            if i >= len(p_arr):
+                continue
+            if int(cls) == -1:
+                aligned[0] = float(p_arr[i])
+            elif int(cls) == 0:
+                aligned[1] = float(p_arr[i])
+            elif int(cls) == 1:
+                aligned[2] = float(p_arr[i])
+        s = float(np.sum(aligned))
+        if s <= 0:
+            return np.asarray([0.2, 0.6, 0.2], dtype=float)
+        return aligned / s
+
+    @staticmethod
+    def _normalize_weights(weights: np.ndarray) -> np.ndarray:
+        arr = np.asarray(weights, dtype=float).reshape(-1)
+        if arr.size <= 0:
+            return arr
+        arr = np.clip(arr, 0.0, None)
+        s = float(np.sum(arr))
+        if s <= 0:
+            return np.full(arr.shape, 1.0 / float(arr.size), dtype=float)
+        return arr / s
+
+    def _compose_moe_gate_features(
+        self,
+        feat_row: np.ndarray,
+        expert_probs: list[np.ndarray],
+    ) -> np.ndarray:
+        base = np.asarray(feat_row, dtype=float).reshape(-1)
+        parts: list[np.ndarray] = [base]
+        for p in list(expert_probs or []):
+            parts.append(np.asarray(p, dtype=float).reshape(-1))
+        if not parts:
+            return np.zeros(1, dtype=float)
+        return np.concatenate(parts, axis=0)
+
+    def _predict_moe(
+        self,
+        *,
+        feat_arr: np.ndarray,
+        rule_score: float,
+    ) -> dict[str, Any]:
+        """Predict sentiment using mixture-of-experts artifact."""
+        moe = self._moe_model if isinstance(self._moe_model, dict) else {}
+        expert_models = dict(moe.get("expert_models", {}) or {})
+        expert_names = list(moe.get("expert_names", []) or [])
+        if not expert_names:
+            expert_names = ["rule", "logreg", "mlp"]
+
+        feat_row = np.asarray(feat_arr, dtype=float).reshape(-1)
+        experts_used: list[str] = []
+        expert_probs: list[np.ndarray] = []
+
+        for name in expert_names:
+            lname = str(name or "").strip().lower()
+            if lname == "rule":
+                probs = self._rule_expert_probs(rule_score)
+            elif lname == "logreg":
+                model = expert_models.get("logreg", self._calibrator)
+                if model is None:
+                    continue
+                try:
+                    raw = model.predict_proba(np.asarray([feat_row], dtype=float))[0]
+                    probs = self._align_class_probs(raw, getattr(model, "classes_", []))
+                except Exception:
+                    continue
+            elif lname in {"mlp", "hybrid_nn"}:
+                model = expert_models.get("mlp", self._hybrid_calibrator)
+                if model is None:
+                    continue
+                try:
+                    raw = model.predict_proba(np.asarray([feat_row], dtype=float))[0]
+                    probs = self._align_class_probs(raw, getattr(model, "classes_", []))
+                except Exception:
+                    continue
+            else:
+                continue
+            expert_probs.append(np.asarray(probs, dtype=float).reshape(-1))
+            experts_used.append(lname)
+
+        if not expert_probs:
+            # Hard fallback if the artifact is malformed.
+            fallback_probs = self._rule_expert_probs(rule_score)
+            return {
+                "overall": float(fallback_probs[2] - fallback_probs[0]),
+                "confidence": float(np.max(fallback_probs)),
+                "probs": fallback_probs,
+                "experts": ["rule"],
+                "weights": np.asarray([1.0], dtype=float),
+                "model_used": "moe(rule_fallback)",
+            }
+
+        static_weights = np.asarray(moe.get("static_weights", []), dtype=float).reshape(-1)
+        if static_weights.size != len(expert_probs):
+            static_weights = np.full(len(expert_probs), 1.0 / float(len(expert_probs)), dtype=float)
+        static_weights = self._normalize_weights(static_weights)
+
+        gate_weights = static_weights
+        gate_model = moe.get("gate_model")
+        if gate_model is not None and len(expert_probs) > 1:
+            try:
+                gate_in = self._compose_moe_gate_features(feat_row, expert_probs)
+                raw_gate = np.asarray(
+                    gate_model.predict_proba(np.asarray([gate_in], dtype=float))[0],
+                    dtype=float,
+                )
+                gate_classes = np.asarray(getattr(gate_model, "classes_", []), dtype=int).reshape(-1)
+                if gate_classes.size == raw_gate.size and gate_classes.size > 0:
+                    aligned = np.zeros(len(expert_probs), dtype=float)
+                    for i, cls in enumerate(gate_classes.tolist()):
+                        idx = int(cls)
+                        if 0 <= idx < len(aligned):
+                            aligned[idx] = float(raw_gate[i])
+                    gate_weights = self._normalize_weights(aligned)
+                elif raw_gate.size == len(expert_probs):
+                    gate_weights = self._normalize_weights(raw_gate)
+            except Exception:
+                gate_weights = static_weights
+
+        mix = np.zeros(3, dtype=float)
+        for w, p in zip(gate_weights.tolist(), expert_probs):
+            mix += float(w) * np.asarray(p, dtype=float)
+        mix = self._normalize_weights(mix)
+
+        return {
+            "overall": float(mix[2] - mix[0]),
+            "confidence": float(np.max(mix)),
+            "probs": mix,
+            "experts": experts_used,
+            "weights": gate_weights,
+            "model_used": "moe(" + ",".join(experts_used) + ")",
+        }
 
     def analyze(self, article: NewsArticle, use_cache: bool = True) -> LLMSentimentResult:
         """Analyze sentiment of a single article with enhanced features.
@@ -1172,9 +1339,7 @@ class LLM_sentimentAnalyzer:
         market = float(feat[3])
         overall = self._clip((0.72 * tf_overall) + (0.28 * rule), -1.0, 1.0)
         hybrid_used = False
-
-        if str(getattr(article, "category", "")).lower() == "policy":
-            overall = self._clip((0.55 * overall) + (0.45 * policy), -1.0, 1.0)
+        moe_used = False
 
         # Apply scaler for calibrator inference
         feat_arr = np.asarray([feat], dtype=float)
@@ -1184,7 +1349,30 @@ class LLM_sentimentAnalyzer:
             except Exception:
                 pass
 
-        if self._calibrator is not None:
+        if self._moe_model is not None:
+            try:
+                moe_pred = self._predict_moe(
+                    feat_arr=feat_arr,
+                    rule_score=rule,
+                )
+                overall = self._clip(
+                    (0.85 * float(moe_pred.get("overall", overall)))
+                    + (0.15 * overall),
+                    -1.0,
+                    1.0,
+                )
+                tf_conf = self._clip(
+                    (0.6 * tf_conf) + (0.4 * float(moe_pred.get("confidence", tf_conf))),
+                    0.0,
+                    1.0,
+                )
+                model_used = str(moe_pred.get("model_used", "moe"))
+                moe_used = True
+            except Exception:
+                moe_used = False
+
+        # Backward-compatible fallback path for legacy artifacts.
+        if not moe_used and self._calibrator is not None:
             try:
                 probs = self._calibrator.predict_proba(feat_arr)[0]
                 classes = list(self._calibrator.classes_)
@@ -1199,7 +1387,7 @@ class LLM_sentimentAnalyzer:
             except Exception:
                 pass
 
-        if self._hybrid_calibrator is not None:
+        if not moe_used and self._hybrid_calibrator is not None:
             try:
                 probs2 = self._hybrid_calibrator.predict_proba(feat_arr)[0]
                 classes2 = list(self._hybrid_calibrator.classes_)
@@ -1213,6 +1401,9 @@ class LLM_sentimentAnalyzer:
                 hybrid_used = True
             except Exception:
                 pass
+
+        if str(getattr(article, "category", "")).lower() == "policy":
+            overall = self._clip((0.70 * overall) + (0.30 * policy), -1.0, 1.0)
 
         # Entities as list[dict] for LLMSentimentResult
         entities_out = [
@@ -1249,8 +1440,8 @@ class LLM_sentimentAnalyzer:
             keywords=keywords,
             uncertainty=float(1.0 - conf),
             model_used=(
-                f"{model_used} + hybrid_neural_network"
-                if hybrid_used
+                f"{model_used} + legacy_hybrid"
+                if (hybrid_used and not moe_used)
                 else model_used
             ),
             processing_time_ms=float((time.time() - started) * 1000.0),
@@ -1464,6 +1655,207 @@ class LLM_sentimentAnalyzer:
             self._circuit_breaker.reset()
 
     # ----------------------------------------------------------------
+    # Chat generation (self-trained transformer, no Ollama required)
+    # ----------------------------------------------------------------
+
+    @staticmethod
+    def _run_async_sync(coro: Any) -> Any:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(coro)
+
+        # If already in an event loop (same thread), use a worker thread loop.
+        if loop.is_running():
+            out: dict[str, Any] = {}
+            err: dict[str, BaseException] = {}
+
+            def _runner() -> None:
+                worker_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(worker_loop)
+                try:
+                    out["value"] = worker_loop.run_until_complete(coro)
+                except BaseException as exc:  # pragma: no cover - safeguard
+                    err["error"] = exc
+                finally:
+                    worker_loop.close()
+
+            th = threading.Thread(target=_runner, daemon=True)
+            th.start()
+            th.join()
+            if "error" in err:
+                raise err["error"]
+            return out.get("value")
+        return loop.run_until_complete(coro)
+
+    def _chat_system_prompt(self) -> str:
+        return (
+            "You are a professional stock and macro market assistant. "
+            "Use concise, structured reasoning. "
+            "Be explicit about uncertainty and risk. "
+            "When data is missing, say it clearly instead of guessing."
+        )
+
+    def _chat_prompt_with_state(
+        self,
+        prompt: str,
+        symbol: str | None,
+        app_state: dict[str, Any] | None,
+    ) -> str:
+        state = dict(app_state or {})
+        state_symbol = str(symbol or state.get("symbol", "") or "").strip()
+        interval = str(state.get("interval", "") or "").strip()
+        forecast = int(state.get("forecast_bars", 0) or 0)
+        lookback = int(state.get("lookback_bars", 0) or 0)
+        monitoring = str(state.get("monitoring", "") or "").strip()
+        signal = dict(state.get("news_policy_signal", {}) or {})
+        overall = float(signal.get("overall", 0.0) or 0.0)
+        policy = float(signal.get("policy", 0.0) or 0.0)
+        confidence = float(signal.get("confidence", 0.0) or 0.0)
+        return (
+            "Application state:\n"
+            f"- symbol: {state_symbol or '--'}\n"
+            f"- interval: {interval or '--'}\n"
+            f"- forecast_bars: {forecast}\n"
+            f"- lookback_bars: {lookback}\n"
+            f"- monitoring: {monitoring or '--'}\n"
+            f"- news_signal_overall: {overall:+.3f}\n"
+            f"- news_signal_policy: {policy:+.3f}\n"
+            f"- news_signal_confidence: {confidence:.3f}\n\n"
+            f"User request:\n{str(prompt or '').strip()}"
+        )
+
+    def _ensure_chat_llm(self) -> Any:
+        with self._chat_lock:
+            if self._chat_llm is not None:
+                return self._chat_llm
+            from ai.local_llm import LLMBackend, LocalLLMConfig, get_llm
+
+            chat_model_dir = self.cache_dir / "chat_transformer"
+            config = LocalLLMConfig(
+                backend=LLMBackend.TRANSFORMERS_LOCAL,
+                model_name="self-chat-transformer",
+                local_model_path=str(chat_model_dir if chat_model_dir.exists() else ""),
+                local_files_only=True,
+                temperature=0.35,
+                top_p=0.9,
+                max_tokens=512,
+                context_window=4096,
+                request_timeout_seconds=180.0,
+                seed=42,
+            )
+            self._chat_llm = get_llm(config)
+            self._run_async_sync(self._chat_llm.initialize())
+            return self._chat_llm
+
+    @staticmethod
+    def _extract_action_from_chat(answer: str) -> str:
+        text = str(answer or "")
+        m = re.search(r"^\s*ACTION\s*:\s*(.+)$", text, flags=re.IGNORECASE | re.MULTILINE)
+        if m:
+            return str(m.group(1) or "").strip()
+        return ""
+
+    def _fallback_chat_response(
+        self,
+        prompt: str,
+        symbol: str | None,
+        app_state: dict[str, Any] | None,
+    ) -> str:
+        text = str(prompt or "").strip()
+        state = dict(app_state or {})
+        state_symbol = str(symbol or state.get("symbol", "") or "").strip()
+        if not text:
+            return "Please send a specific question."
+        return (
+            "Self chat model is not ready yet. "
+            f"Current symbol={state_symbol or '--'}. "
+            "Train your local transformer model first, then retry."
+        )
+
+    def generate_response(
+        self,
+        *,
+        prompt: str,
+        symbol: str | None = None,
+        app_state: dict[str, Any] | None = None,
+        history: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Generate professional chat response using local self-trained transformer."""
+        clean_prompt = str(prompt or "").strip()
+        if not clean_prompt:
+            return {"answer": "Please provide a prompt.", "action": "", "local_model_ready": False}
+
+        if self._injection_detector and not self._injection_detector.is_safe(clean_prompt):
+            return {
+                "answer": "Input blocked by prompt-injection safety policy.",
+                "action": "",
+                "local_model_ready": False,
+            }
+
+        try:
+            llm = self._ensure_chat_llm()
+            final_prompt = self._chat_prompt_with_state(clean_prompt, symbol, app_state)
+            response = self._run_async_sync(
+                llm.generate(
+                    prompt=final_prompt,
+                    system_prompt=self._chat_system_prompt(),
+                    history=list(history or []),
+                )
+            )
+            answer = str(getattr(response, "content", "") or "").strip()
+            finish_reason = str(getattr(response, "finish_reason", "") or "").strip().lower()
+            if finish_reason == "error":
+                return {
+                    "answer": self._fallback_chat_response(clean_prompt, symbol, app_state),
+                    "action": "",
+                    "local_model_ready": False,
+                    "error": answer or "chat backend error",
+                }
+            if not answer:
+                answer = self._fallback_chat_response(clean_prompt, symbol, app_state)
+                return {"answer": answer, "action": "", "local_model_ready": False}
+            return {
+                "answer": answer,
+                "action": self._extract_action_from_chat(answer),
+                "local_model_ready": True,
+            }
+        except Exception as exc:
+            log.warning("Self chat generation failed: %s", exc)
+            return {
+                "answer": self._fallback_chat_response(clean_prompt, symbol, app_state),
+                "action": "",
+                "local_model_ready": False,
+                "error": str(exc),
+            }
+
+    def train_chat_model(
+        self,
+        *,
+        chat_history_path: str | Path = "data/chat_history/chat_history.json",
+        max_steps: int = 1200,
+        epochs: int = 2,
+    ) -> dict[str, Any]:
+        """Train a local transformer chat model from your own corpus."""
+        try:
+            from ai.self_chat_trainer import SelfChatTrainingConfig, train_self_chat_model
+
+            cfg = SelfChatTrainingConfig(
+                output_dir=self.cache_dir / "chat_transformer",
+                chat_history_path=Path(chat_history_path),
+                training_corpus_path=self._training_corpus_path,
+                epochs=max(1, int(epochs)),
+                max_steps=max(100, int(max_steps)),
+            )
+            report = dict(train_self_chat_model(cfg) or {})
+            # Force chat backend reload so new model is used immediately.
+            with self._chat_lock:
+                self._chat_llm = None
+            return report
+        except Exception as exc:
+            return {"status": "error", "message": str(exc)}
+
+    # ----------------------------------------------------------------
     # Pickle load/save helpers
     # ----------------------------------------------------------------
 
@@ -1473,7 +1865,10 @@ class LLM_sentimentAnalyzer:
             "sklearn.linear_model._logistic.LogisticRegression",
             "sklearn.neural_network._multilayer_perceptron.MLPClassifier",
             "sklearn.preprocessing._data.StandardScaler",
+            "sklearn.preprocessing._label.LabelBinarizer",
             "numpy.dtype",
+            "numpy._core.multiarray.scalar",
+            "numpy.core.multiarray.scalar",
             "numpy.random.mtrand.RandomState",
             "numpy.random._pickle.__randomstate_ctor",
             "numpy.random._pickle.__bit_generator_ctor",
@@ -1541,6 +1936,22 @@ class LLM_sentimentAnalyzer:
         try:
             with self._hybrid_calibrator_path.open("wb") as f:
                 pickle.dump(self._hybrid_calibrator, f)
+        except Exception:
+            pass
+
+    def _load_moe_model(self) -> None:
+        self._moe_model = None
+        if self._moe_path.exists():
+            self._moe_model = self._safe_load_llm_pickle(
+                self._moe_path, artifact_name="moe model"
+            )
+
+    def _save_moe_model(self) -> None:
+        if self._moe_model is None:
+            return
+        try:
+            with self._moe_path.open("wb") as f:
+                pickle.dump(self._moe_model, f)
         except Exception:
             pass
 
@@ -1650,6 +2061,7 @@ class LLM_sentimentAnalyzer:
         *,
         hours_back: int,
         min_samples: int = 50,
+        force_relaxed: bool = False,
     ) -> tuple[list[NewsArticle], dict[str, int]]:
         """Filter articles for quality. Returns COPIES — never mutates input.
         
@@ -1681,7 +2093,8 @@ class LLM_sentimentAnalyzer:
         seen_ids: set[str] = set()
 
         input_count = len(rows or [])
-        relax_mode = input_count < min_samples * 2
+        relax_mode = bool(force_relaxed) or input_count < min_samples * 2
+        china_direct_mode = bool(env_flag("TRADING_CHINA_DIRECT", "0"))
         
         # Spam/clickbait patterns
         spam_patterns = [
@@ -1706,9 +2119,20 @@ class LLM_sentimentAnalyzer:
             text = f"{title} {content}".strip()
             token_chars = len(re.findall(r"[A-Za-z0-9\u4e00-\u9fff]", text))
 
-            min_title_len = 4 if relax_mode else 6
-            min_tokens = 10 if relax_mode else 18
-            if len(title) < min_title_len or token_chars < min_tokens:
+            if force_relaxed:
+                min_title_len = 1
+                min_tokens = 1
+            elif relax_mode:
+                min_title_len = 4
+                min_tokens = 8 if china_direct_mode else 10
+            else:
+                min_title_len = 5 if china_direct_mode else 6
+                min_tokens = 12 if china_direct_mode else 18
+            if force_relaxed:
+                too_short = len(title) < min_title_len and token_chars < min_tokens
+            else:
+                too_short = len(title) < min_title_len or token_chars < min_tokens
+            if too_short:
                 stats["drop_length"] += 1
                 continue
 
@@ -1722,7 +2146,8 @@ class LLM_sentimentAnalyzer:
             for pattern in spam_patterns:
                 if re.search(pattern, text, re.IGNORECASE):
                     spam_score += 1
-            if spam_score >= 2 and not relax_mode:
+            spam_threshold = 3 if relax_mode else 2
+            if spam_score >= spam_threshold and not force_relaxed:
                 stats["drop_spam"] += 1
                 continue
 
@@ -1758,7 +2183,8 @@ class LLM_sentimentAnalyzer:
 
             # Content quality scoring
             quality_score = self._compute_content_quality_score(text, title, content)
-            if quality_score < 0.3 and not relax_mode:
+            quality_threshold = 0.15 if force_relaxed else (0.25 if relax_mode else 0.3)
+            if quality_score < quality_threshold:
                 stats["drop_low_quality"] += 1
                 continue
 
@@ -2184,7 +2610,8 @@ class LLM_sentimentAnalyzer:
     def get_training_status(self) -> dict[str, Any]:
         calibrator_ready = bool(self._calibrator is not None)
         hybrid_nn_ready = bool(self._hybrid_calibrator is not None)
-        models_loaded = calibrator_ready or hybrid_nn_ready
+        moe_ready = bool(isinstance(self._moe_model, dict))
+        models_loaded = calibrator_ready or hybrid_nn_ready or moe_ready
 
         if self._status_path.exists():
             try:
@@ -2197,6 +2624,8 @@ class LLM_sentimentAnalyzer:
                         data["status"] = "trained"
                         data["calibrator_ready"] = calibrator_ready
                         data["hybrid_nn_ready"] = hybrid_nn_ready
+                        data["moe_ready"] = moe_ready
+                        data["training_architecture"] = "mixture_of_experts"
                         self._write_training_status(data)
                     return data
             except Exception:
@@ -2205,17 +2634,19 @@ class LLM_sentimentAnalyzer:
         if models_loaded:
             return {
                 "status": "trained",
-                "training_architecture": "hybrid_neural_network",
+                "training_architecture": "mixture_of_experts",
                 "artifact_dir": str(self.cache_dir),
                 "calibrator_ready": calibrator_ready,
                 "hybrid_nn_ready": hybrid_nn_ready,
+                "moe_ready": moe_ready,
             }
         return {
             "status": "not_trained",
-            "training_architecture": "hybrid_neural_network",
+            "training_architecture": "mixture_of_experts",
             "artifact_dir": str(self.cache_dir),
             "calibrator_ready": False,
             "hybrid_nn_ready": False,
+            "moe_ready": False,
         }
 
     @staticmethod
@@ -2305,29 +2736,24 @@ class LLM_sentimentAnalyzer:
                 "finished_at": datetime.now().isoformat(),
                 "duration_seconds": float(time.time() - t0),
                 "notes": "No articles provided.",
-                "training_architecture": "hybrid_neural_network",
+                "training_architecture": "mixture_of_experts",
                 "calibrator_ready": bool(self._calibrator is not None),
                 "hybrid_nn_ready": bool(self._hybrid_calibrator is not None),
+                "moe_ready": bool(isinstance(self._moe_model, dict)),
             }
             self._write_training_status(out)
             return out
 
         transformer_requested = bool(use_transformer_labels)
         transformer_ready = False
-        pre_notes: list[str] = []
-        if transformer_requested:
-            try:
-                self._load_pipeline()
-            except Exception:
-                pass
-            transformer_ready = bool(self._pipe is not None)
-            if not transformer_ready:
-                pre_notes.append(
-                    "Transformer labels unavailable; using rule-based pseudo labels."
-                )
+        notes: list[str] = [
+            "Transformer labels disabled by design; training MoE with self-supervised labels."
+        ]
 
         x: list[list[float]] = []
-        y: list[int] = []
+        sample_scores: list[float] = []
+        sample_thresholds: list[float] = []
+        labeling_notes: list[str] = []
 
         for a in rows:
             lang = str(getattr(a, "language", "") or "")
@@ -2346,38 +2772,60 @@ class LLM_sentimentAnalyzer:
                 self.ZH_POS if lang == "zh" else self.EN_POS,
                 self.ZH_NEG if lang == "zh" else self.EN_NEG,
             )
-
             sample_score = float(base)
-            sample_conf = 0.4
+            sample_conf = self._clip(0.35 + (0.45 * abs(sample_score)), 0.05, 0.95)
             threshold = 0.08
-            if transformer_requested and transformer_ready:
-                try:
-                    tf_overall, _, _, _, tf_conf = self._parse_scores(
-                        self._pipe(text[:512])
-                    )
-                    sample_score = float(tf_overall)
-                    sample_conf = float(tf_conf)
-                    threshold = 0.15
-                except Exception as exc:
-                    log.debug("Transformer label failed for one sample: %s", exc)
-
-            lbl = 1 if sample_score >= threshold else (-1 if sample_score <= -threshold else 0)
 
             x.append(
-                self._build_features(a, tf_overall=sample_score, tf_conf=sample_conf, language=lang)
+                self._build_features(
+                    a, tf_overall=sample_score, tf_conf=sample_conf, language=lang
+                )
             )
-            y.append(lbl)
+            sample_scores.append(float(sample_score))
+            sample_thresholds.append(float(threshold))
 
-        notes: list[str] = list(pre_notes)
-        x_arr = np.asarray(x, dtype=float)
-        y_arr = np.asarray(y, dtype=int)
+        x_raw_arr = np.asarray(x, dtype=float)
+        x_arr = np.asarray(x_raw_arr, dtype=float)
+        y_arr = np.asarray(
+            [
+                (1 if score >= th else (-1 if score <= -th else 0))
+                for score, th in zip(sample_scores, sample_thresholds)
+            ],
+            dtype=int,
+        )
+
+        if len(set(int(v) for v in y_arr.tolist())) < 2 and len(sample_scores) >= 6:
+            score_arr = np.asarray(sample_scores, dtype=float)
+            low_cut = float(np.quantile(score_arr, 0.30))
+            high_cut = float(np.quantile(score_arr, 0.70))
+            if high_cut > low_cut:
+                y_arr = np.asarray(
+                    [
+                        (1 if s >= high_cut else (-1 if s <= low_cut else 0))
+                        for s in score_arr
+                    ],
+                    dtype=int,
+                )
+                labeling_notes.append(
+                    "Adaptive pseudo-label thresholds applied for class diversity."
+                )
+
+        if len(set(int(v) for v in y_arr.tolist())) < 2 and len(sample_scores) >= 2:
+            rank_order = np.argsort(np.asarray(sample_scores, dtype=float))
+            y_arr = np.zeros(len(sample_scores), dtype=int)
+            y_arr[int(rank_order[0])] = -1
+            y_arr[int(rank_order[-1])] = 1
+            labeling_notes.append(
+                "Rank-based bootstrap labels applied due low sentiment variance."
+            )
+
+        notes.extend(labeling_notes)
         class_distribution = {
             "positive": int(np.sum(y_arr == 1)),
             "negative": int(np.sum(y_arr == -1)),
             "neutral": int(np.sum(y_arr == 0)),
         }
 
-        # Feature scaling
         scaler = None
         if feature_scaling and _SKLEARN_AVAILABLE:
             try:
@@ -2387,24 +2835,23 @@ class LLM_sentimentAnalyzer:
                 x_arr = scaler.fit_transform(x_arr)
                 self._scaler = scaler
                 self._save_scaler()
-                notes.append("Feature scaling applied (StandardScaler)")
+                notes.append("Feature scaling applied (StandardScaler).")
             except Exception as exc:
                 notes.append(f"Feature scaling failed: {exc}")
 
-        unique_classes = len(set(y_arr))
-
-        # Train/val split
         train_idx, val_idx = self._split_train_validation_indices(y_arr, validation_split)
         x_train, x_val = x_arr[train_idx], x_arr[val_idx]
+        x_raw_train, x_raw_val = x_raw_arr[train_idx], x_raw_arr[val_idx]
         y_train, y_val = y_arr[train_idx], y_arr[val_idx]
         train_unique_classes = len(set(int(v) for v in y_train.tolist()))
 
         logreg_ready = False
         hybrid_nn_ready = False
+        gate_ready = False
         val_metrics: dict[str, float] = {}
 
-        # Logistic Regression
-        if unique_classes >= 2 and train_unique_classes >= 2 and _SKLEARN_AVAILABLE and len(x_train) >= 2:
+        # Expert 1: logistic expert
+        if train_unique_classes >= 2 and _SKLEARN_AVAILABLE and len(x_train) >= 2:
             try:
                 train_class_counts = [int(np.sum(y_train == c)) for c in np.unique(y_train)]
                 imbalance = (
@@ -2413,38 +2860,33 @@ class LLM_sentimentAnalyzer:
                     else 1.0
                 )
                 class_weight = "balanced" if imbalance > 2.0 else None
-
-                clf = LogisticRegression(
-                    max_iter=max(320, epochs * 100),
-                    multi_class="auto",
-                    class_weight=class_weight,
-                    solver="lbfgs",
-                    C=1.0,
-                    random_state=42,
-                )
+                try:
+                    clf = LogisticRegression(
+                        max_iter=max(320, epochs * 100),
+                        multi_class="auto",
+                        class_weight=class_weight,
+                        solver="lbfgs",
+                        C=1.0,
+                        random_state=42,
+                    )
+                except TypeError:
+                    clf = LogisticRegression(
+                        max_iter=max(320, epochs * 100),
+                        class_weight=class_weight,
+                        solver="lbfgs",
+                        C=1.0,
+                        random_state=42,
+                    )
                 clf.fit(x_train, y_train)
                 self._calibrator = clf
                 self._save_calibrator()
                 logreg_ready = True
-
-                if len(x_val) > 0 and len(set(y_val)) > 1:
-                    from sklearn.metrics import accuracy_score, f1_score
-
-                    val_pred = clf.predict(x_val)
-                    val_metrics["accuracy"] = float(accuracy_score(y_val, val_pred))
-                    val_metrics["f1_weighted"] = float(
-                        f1_score(y_val, val_pred, average="weighted", zero_division=0)
-                    )
-                    notes.append(
-                        f"LogReg val accuracy={val_metrics['accuracy']:.3f}"
-                    )
             except Exception as exc:
-                notes.append(f"Logistic calibration failed: {exc}")
+                notes.append(f"Logistic expert fit failed: {exc}")
         else:
-            notes.append("Not enough class diversity for logistic calibrator.")
+            notes.append("Logistic expert skipped (insufficient class diversity or sklearn unavailable).")
 
-        # MLP — FIX: Properly handle convergence (warnings.warn, not raise)
-        nn_model = None
+        # Expert 2: MLP expert
         if train_unique_classes >= 2 and _SKLEARN_MLP_AVAILABLE and len(x_train) >= 30:
             try:
                 if len(x_train) < 100:
@@ -2469,15 +2911,11 @@ class LLM_sentimentAnalyzer:
                     n_iter_no_change=20,
                     tol=1e-4,
                 )
-                # FIX 8: Capture convergence warnings properly
-                # sklearn raises ConvergenceWarning via warnings.warn(), not via raise
                 with warnings.catch_warnings(record=True) as caught_warnings:
                     warnings.simplefilter("always")
                     nn_model.fit(x_train, y_train)
-
-                # Check for both UserWarning and sklearn ConvergenceWarning
                 convergence_warned = any(
-                    issubclass(w.category, Warning)  # Catch all warnings including ConvergenceWarning
+                    issubclass(w.category, Warning)
                     or (
                         _SklearnConvergenceWarning is not None
                         and issubclass(w.category, _SklearnConvergenceWarning)
@@ -2485,45 +2923,178 @@ class LLM_sentimentAnalyzer:
                     for w in caught_warnings
                 )
                 if convergence_warned:
-                    notes.append("MLP trained with convergence warning (may need more iterations)")
-
-                # Check if the model actually learned classes
+                    notes.append("MLP expert trained with convergence warning.")
                 if hasattr(nn_model, "classes_") and nn_model.classes_ is not None:
                     self._hybrid_calibrator = nn_model
                     self._save_hybrid_calibrator()
                     hybrid_nn_ready = True
-
-                    if len(x_val) > 0 and len(set(y_val)) > 1:
-                        from sklearn.metrics import accuracy_score
-
-                        nn_pred = nn_model.predict(x_val)
-                        val_metrics["mlp_accuracy"] = float(
-                            accuracy_score(y_val, nn_pred)
-                        )
-                        notes.append(
-                            f"MLP val accuracy={val_metrics['mlp_accuracy']:.3f}"
-                        )
-                else:
-                    notes.append("MLP fit produced no valid classes")
-
             except Exception as exc:
-                notes.append(f"Hybrid NN fit failed: {exc}")
+                notes.append(f"MLP expert fit failed: {exc}")
         elif not _SKLEARN_MLP_AVAILABLE:
-            notes.append("MLP classifier unavailable.")
-        elif len(x_train) < 30:
-            notes.append(f"Insufficient samples ({len(x_train)}) for MLP (need >=30).")
-
-        # Determine status
-        if logreg_ready or hybrid_nn_ready:
-            status = "trained"
+            notes.append("MLP expert unavailable.")
         else:
-            status = "partial" if len(rows) > 0 else "skipped"
+            notes.append(f"MLP expert skipped (samples={len(x_train)}; need >=30).")
 
-        architecture = (
-            "hybrid_neural_network"
-            if (logreg_ready or hybrid_nn_ready)
-            else "rule_based_fallback"
+        class_to_idx = {-1: 0, 0: 1, 1: 2}
+
+        def _predict_model_probs(model: Any, x_input: np.ndarray) -> np.ndarray | None:
+            if model is None:
+                return None
+            try:
+                raw = np.asarray(model.predict_proba(x_input), dtype=float)
+                classes = np.asarray(getattr(model, "classes_", []), dtype=int).reshape(-1)
+                if raw.ndim != 2 or raw.shape[0] != len(x_input):
+                    return None
+                out_probs = np.zeros((raw.shape[0], 3), dtype=float)
+                for j, cls in enumerate(classes.tolist()):
+                    idx = class_to_idx.get(int(cls))
+                    if idx is not None and j < raw.shape[1]:
+                        out_probs[:, idx] = raw[:, j]
+                out_probs = np.clip(out_probs, 0.0, None)
+                row_sum = np.sum(out_probs, axis=1, keepdims=True)
+                row_sum[row_sum <= 0] = 1.0
+                return out_probs / row_sum
+            except Exception:
+                return None
+
+        def _build_expert_probs(
+            x_input: np.ndarray,
+            x_raw_input: np.ndarray,
+            *,
+            include_models: bool = True,
+        ) -> tuple[list[str], list[np.ndarray]]:
+            names: list[str] = ["rule"]
+            probs: list[np.ndarray] = [
+                np.vstack(
+                    [self._rule_expert_probs(float(v)) for v in x_raw_input[:, 1].tolist()]
+                )
+            ]
+            if include_models:
+                p_log = _predict_model_probs(self._calibrator, x_input)
+                if p_log is not None:
+                    names.append("logreg")
+                    probs.append(p_log)
+                p_mlp = _predict_model_probs(self._hybrid_calibrator, x_input)
+                if p_mlp is not None:
+                    names.append("mlp")
+                    probs.append(p_mlp)
+            return names, probs
+
+        expert_names, expert_probs_train = _build_expert_probs(
+            x_train, x_raw_train, include_models=True
         )
+        n_experts = len(expert_names)
+
+        # Static expert weights from per-expert train accuracy.
+        expert_scores = np.ones(n_experts, dtype=float) * 0.10
+        for i, probs in enumerate(expert_probs_train):
+            pred_cls = self._CLASS_ORDER[np.argmax(probs, axis=1)]
+            expert_scores[i] += float(np.mean(pred_cls == y_train))
+        static_weights = self._normalize_weights(expert_scores)
+
+        gate_model = None
+        if n_experts > 1 and _SKLEARN_AVAILABLE and len(x_train) >= 8:
+            try:
+                true_prob = np.zeros((len(y_train), n_experts), dtype=float)
+                for i in range(len(y_train)):
+                    y_idx = class_to_idx.get(int(y_train[i]), 1)
+                    for e in range(n_experts):
+                        true_prob[i, e] = float(expert_probs_train[e][i, y_idx])
+                gate_y = np.argmax(true_prob, axis=1).astype(int)
+                if len(set(int(v) for v in gate_y.tolist())) >= 2:
+                    gate_x = np.hstack(
+                        [x_train] + [np.asarray(p, dtype=float) for p in expert_probs_train]
+                    )
+                    try:
+                        gate_model = LogisticRegression(
+                            max_iter=max(220, epochs * 80),
+                            multi_class="auto",
+                            class_weight="balanced",
+                            solver="lbfgs",
+                            random_state=42,
+                        )
+                    except TypeError:
+                        gate_model = LogisticRegression(
+                            max_iter=max(220, epochs * 80),
+                            class_weight="balanced",
+                            solver="lbfgs",
+                            random_state=42,
+                        )
+                    gate_model.fit(gate_x, gate_y)
+                    gate_ready = True
+            except Exception as exc:
+                gate_model = None
+                notes.append(f"MoE gate fit failed: {exc}")
+
+        def _moe_predict_probs(
+            x_input: np.ndarray,
+            x_raw_input: np.ndarray,
+        ) -> np.ndarray:
+            names, probs_list = _build_expert_probs(x_input, x_raw_input, include_models=True)
+            if not probs_list:
+                return np.vstack(
+                    [self._rule_expert_probs(float(v)) for v in x_raw_input[:, 1].tolist()]
+                )
+            local_n_experts = len(names)
+            if gate_model is not None and local_n_experts > 1:
+                gate_x = np.hstack([x_input] + [np.asarray(p, dtype=float) for p in probs_list])
+                raw_gate = np.asarray(gate_model.predict_proba(gate_x), dtype=float)
+                gate_classes = np.asarray(getattr(gate_model, "classes_", []), dtype=int).reshape(-1)
+                gate_w = np.zeros((len(x_input), local_n_experts), dtype=float)
+                for j, cls in enumerate(gate_classes.tolist()):
+                    idx = int(cls)
+                    if 0 <= idx < local_n_experts and j < raw_gate.shape[1]:
+                        gate_w[:, idx] = raw_gate[:, j]
+                gate_w = np.clip(gate_w, 0.0, None)
+                row_sum = np.sum(gate_w, axis=1, keepdims=True)
+                row_sum[row_sum <= 0] = 1.0
+                gate_w = gate_w / row_sum
+            else:
+                local_weights = np.asarray(static_weights, dtype=float).reshape(-1)
+                if local_weights.size != local_n_experts:
+                    local_weights = np.full(local_n_experts, 1.0 / float(local_n_experts), dtype=float)
+                gate_w = np.tile(local_weights.reshape(1, -1), (len(x_input), 1))
+
+            mix = np.zeros((len(x_input), 3), dtype=float)
+            for e in range(local_n_experts):
+                mix += gate_w[:, e : e + 1] * np.asarray(probs_list[e], dtype=float)
+            mix = np.clip(mix, 0.0, None)
+            row_sum = np.sum(mix, axis=1, keepdims=True)
+            row_sum[row_sum <= 0] = 1.0
+            return mix / row_sum
+
+        moe_probs_train = _moe_predict_probs(x_train, x_raw_train)
+        if len(x_val) > 0:
+            try:
+                from sklearn.metrics import accuracy_score, f1_score
+
+                moe_probs_val = _moe_predict_probs(x_val, x_raw_val)
+                pred_val = self._CLASS_ORDER[np.argmax(moe_probs_val, axis=1)]
+                val_metrics["moe_accuracy"] = float(accuracy_score(y_val, pred_val))
+                val_metrics["moe_f1_weighted"] = float(
+                    f1_score(y_val, pred_val, average="weighted", zero_division=0)
+                )
+            except Exception as exc:
+                notes.append(f"MoE validation metric failed: {exc}")
+
+        moe_ready = bool(n_experts >= 1)
+        self._moe_model = {
+            "version": 1,
+            "trained_at": datetime.now().isoformat(),
+            "class_order": self._CLASS_ORDER.tolist(),
+            "expert_names": list(expert_names),
+            "expert_models": {
+                "logreg": self._calibrator if logreg_ready else None,
+                "mlp": self._hybrid_calibrator if hybrid_nn_ready else None,
+            },
+            "gate_model": gate_model,
+            "gate_ready": bool(gate_ready),
+            "static_weights": [float(v) for v in np.asarray(static_weights, dtype=float).tolist()],
+        }
+        self._save_moe_model()
+
+        status = "trained" if moe_ready else ("partial" if len(rows) > 0 else "skipped")
+        architecture = "mixture_of_experts" if moe_ready else "rule_based_fallback"
 
         out = {
             "status": status,
@@ -2538,13 +3109,17 @@ class LLM_sentimentAnalyzer:
             "duration_seconds": float(time.time() - t0),
             "notes": "; ".join(notes) if notes else "Training completed.",
             "training_architecture": architecture,
-            "calibrator_ready": logreg_ready,
-            "hybrid_nn_ready": hybrid_nn_ready,
+            "calibrator_ready": bool(self._calibrator is not None),
+            "hybrid_nn_ready": bool(self._hybrid_calibrator is not None),
+            "moe_ready": bool(moe_ready),
+            "moe_gate_ready": bool(gate_ready),
+            "moe_expert_count": int(n_experts),
+            "moe_experts": list(expert_names),
             "artifact_dir": str(self.cache_dir),
             "validation_metrics": val_metrics if val_metrics else None,
             "epochs_used": epochs,
             "feature_scaling_applied": bool(scaler is not None),
-            "transformer_labels_used": bool(transformer_requested and transformer_ready),
+            "transformer_labels_used": False,
             "transformer_labels_requested": transformer_requested,
             "transformer_ready": transformer_ready,
             "class_distribution": class_distribution,
@@ -2622,6 +3197,9 @@ class LLM_sentimentAnalyzer:
         seen_ids: set[str] = set()
         skipped_seen = 0
         source_counts: dict[str, int] = {}
+        queries_used = 0
+        stagnant_queries = 0
+        stagnant_limit = max(8, min(24, len(queries) // 6))
 
         consecutive_empty = 0
         for i, kw in enumerate(queries):
@@ -2654,6 +3232,7 @@ class LLM_sentimentAnalyzer:
             else:
                 consecutive_empty = 0
 
+            before_count = len(articles)
             for article in batch:
                 aid = str(getattr(article, "id", "") or "").strip()
                 if not aid:
@@ -2673,11 +3252,39 @@ class LLM_sentimentAnalyzer:
                 src = str(getattr(article, "source", "") or "unknown").lower()
                 source_counts[src] = source_counts.get(src, 0) + 1
 
+            queries_used = i + 1
+            added_now = max(0, len(articles) - before_count)
+            if added_now <= 0:
+                stagnant_queries += 1
+            else:
+                stagnant_queries = 0
+
             _emit(
                 5 + int((i / max(1, len(queries))) * 65),
                 f"Query {i+1}/{len(queries)}: raw={len(batch)} total={len(articles)}",
                 "collect",
             )
+
+            if (
+                stagnant_queries >= stagnant_limit
+                and len(articles) >= max(1, min_new_articles)
+            ):
+                log.debug(
+                    "Corpus growth stalled (%d consecutive queries with no additions); "
+                    "stopping early after %d/%d queries.",
+                    stagnant_queries,
+                    queries_used,
+                    len(queries),
+                )
+                _emit(
+                    72,
+                    (
+                        f"No corpus growth across {stagnant_queries} queries; "
+                        "stopping query sweep early."
+                    ),
+                    "collect",
+                )
+                break
 
         # Supplement from aggregator if needed
         if len(articles) < min_new_articles:
@@ -2715,11 +3322,35 @@ class LLM_sentimentAnalyzer:
 
         # Quality filter (returns copies, doesn't mutate)
         _emit(78, "Applying quality filters...", "filter")
-        articles, quality_stats = self._filter_high_quality_articles(
+        raw_articles = list(articles)
+        strict_articles, quality_stats = self._filter_high_quality_articles(
             articles,
             hours_back=max(12, hours_back),
             min_samples=max(50, min_new_articles * 2),
         )
+        strict_kept = int(len(strict_articles))
+        articles = list(strict_articles)
+
+        # China feeds often provide short snippets. Run one relaxed pass when strict
+        # filtering leaves too few rows, so each cycle can still train incrementally.
+        relaxed_used = False
+        if len(articles) < max(1, int(min_new_articles)) and raw_articles:
+            _emit(82, "Retrying quality filter in relaxed mode...", "filter")
+            relaxed_articles, relaxed_stats = self._filter_high_quality_articles(
+                raw_articles,
+                hours_back=max(12, hours_back),
+                min_samples=max(1, min_new_articles),
+                force_relaxed=True,
+            )
+            if len(relaxed_articles) > len(articles):
+                articles = list(relaxed_articles)
+                quality_stats = dict(relaxed_stats)
+                relaxed_used = True
+
+        quality_stats = dict(quality_stats)
+        quality_stats["strict_kept"] = strict_kept
+        quality_stats["relaxed_used"] = int(relaxed_used)
+
         articles.sort(
             key=lambda a: getattr(a, "published_at", datetime.min),
             reverse=True,
@@ -2738,7 +3369,7 @@ class LLM_sentimentAnalyzer:
             "source_diversity": float(source_diversity),
             "n_sources": n_sources,
             "quality_filter": quality_stats,
-            "queries_used": len(queries),
+            "queries_used": int(queries_used),
         }
 
         _emit(85, f"Corpus ready: {len(articles)} articles from {n_sources} sources", "complete")
@@ -3220,7 +3851,7 @@ class LLM_sentimentAnalyzer:
         2. Load historical training corpus (if accumulation enabled)
         3. Combine new + historical data for training
         4. Save new articles to persistent corpus
-        5. Train hybrid models on combined data
+        5. Train MoE experts + gate on combined data
         6. Remember seen articles to avoid duplicates
 
         Args:
@@ -3302,8 +3933,12 @@ class LLM_sentimentAnalyzer:
             self._write_training_status(report)
             return report
 
-        # FIX: Handle case where too few new articles collected
-        if len(new_articles) < max(1, min_new_articles):
+        collected_new_articles = list(new_articles)
+        fallback_articles: list[NewsArticle] = []
+        used_historical_fallback = False
+
+        # Handle case where too few truly-new articles were collected.
+        if len(collected_new_articles) < max(1, min_new_articles):
             # If accumulation is enabled, try to use historical data
             if accumulate_training_data:
                 historical = self._load_training_corpus(
@@ -3318,17 +3953,25 @@ class LLM_sentimentAnalyzer:
                         f"Using {len(historical)} historical articles (no new data available)",
                         "boost",
                     )
-                    new_articles = historical
+                    fallback_articles = list(historical)
+                    used_historical_fallback = True
                     collection_stats["used_historical_fallback"] = True
                 else:
                     report = {
                         "status": "no_new_data",
-                        "collected_articles": len(new_articles),
+                        "collected_articles": len(collected_new_articles),
                         "trained_samples": 0,
                         "notes": (
-                            f"Only {len(new_articles)} new articles "
+                            f"Only {len(collected_new_articles)} new articles "
                             f"(min={min_new_articles}), "
                             f"and {len(historical)} historical (insufficient)."
+                        ),
+                        "query_count": int(
+                            collection_stats.get(
+                                "queries_used",
+                                collection_stats.get("query_count", 0),
+                            )
+                            or 0
                         ),
                         **collection_stats,
                     }
@@ -3339,9 +3982,19 @@ class LLM_sentimentAnalyzer:
             else:
                 report = {
                     "status": "no_new_data",
-                    "collected_articles": len(new_articles),
+                    "collected_articles": len(collected_new_articles),
                     "trained_samples": 0,
-                    "notes": f"Only {len(new_articles)} articles (min={min_new_articles}).",
+                    "notes": (
+                        f"Only {len(collected_new_articles)} articles "
+                        f"(min={min_new_articles})."
+                    ),
+                    "query_count": int(
+                        collection_stats.get(
+                            "queries_used",
+                            collection_stats.get("query_count", 0),
+                        )
+                        or 0
+                    ),
                     **collection_stats,
                 }
                 report.update(compat_extras)
@@ -3351,7 +4004,7 @@ class LLM_sentimentAnalyzer:
 
         # Step 2: Load HISTORICAL corpus for accumulation (FIX)
         historical_articles: list[NewsArticle] = []
-        if accumulate_training_data:
+        if accumulate_training_data and not used_historical_fallback:
             _emit(75, "Loading historical training corpus...", "boost")
             # Calculate how much historical data to use
             historical_max = int(max_samples * corpus_boost_ratio)
@@ -3365,29 +4018,48 @@ class LLM_sentimentAnalyzer:
                 len(historical_articles),
             )
 
-        # Step 3: Combine new + historical for training
-        training_articles = list(new_articles)
-        if historical_articles:
-            # Add historical data (avoid duplicates by ID)
-            new_ids = {getattr(a, "id", "") for a in new_articles}
-            for hist_article in historical_articles:
-                if getattr(hist_article, "id", "") not in new_ids:
-                    training_articles.append(hist_article)
+        def _article_id(article: NewsArticle) -> str:
+            aid = str(getattr(article, "id", "") or "").strip()
+            if aid:
+                return aid
+            return _stable_article_id(
+                getattr(article, "source", ""),
+                getattr(article, "title", ""),
+                getattr(article, "url", ""),
+            )
 
-        # Limit to max_samples
+        def _dedupe_articles(items: list[NewsArticle]) -> list[NewsArticle]:
+            out_rows: list[NewsArticle] = []
+            seen: set[str] = set()
+            for row in list(items or []):
+                aid = _article_id(row)
+                if aid in seen:
+                    continue
+                seen.add(aid)
+                out_rows.append(row)
+            return out_rows
+
+        # Step 3: Combine new + fallback + historical for training
+        seed_articles = _dedupe_articles(list(collected_new_articles) + list(fallback_articles))
+        training_articles = list(seed_articles)
+        if historical_articles:
+            training_articles = _dedupe_articles(training_articles + list(historical_articles))
+
+        # Limit to max_samples while preserving preference for latest-cycle rows.
         if len(training_articles) > max_samples:
-            # Prioritize new articles, then best historical
-            training_articles = (
-                list(new_articles) +
-                [a for a in historical_articles if getattr(a, "id", "") not in new_ids]
-            )[:max_samples]
+            seed_ids = {_article_id(a) for a in seed_articles}
+            prioritized = list(seed_articles)
+            for hist_article in historical_articles:
+                if _article_id(hist_article) not in seed_ids:
+                    prioritized.append(hist_article)
+            training_articles = _dedupe_articles(prioritized)[:max_samples]
 
         # Step 4: Save new articles to persistent corpus (FIX)
         save_stats: dict[str, Any] = {}
-        if accumulate_training_data and new_articles:
+        if accumulate_training_data and collected_new_articles:
             _emit(78, "Saving to training corpus...", "save")
             save_stats = self._save_to_training_corpus(
-                new_articles,
+                collected_new_articles,
                 max_corpus_size=max_corpus_size,
             )
 
@@ -3395,7 +4067,8 @@ class LLM_sentimentAnalyzer:
         _emit(
             80,
             f"Training on {len(training_articles)} articles "
-            f"(new={len(new_articles)}, historical={len(historical_articles)})",
+            f"(new={len(collected_new_articles)}, fallback={len(fallback_articles)}, "
+            f"historical={len(historical_articles)})",
             "train",
         )
         train_report = self.train(training_articles, max_samples=max_samples)
@@ -3404,16 +4077,31 @@ class LLM_sentimentAnalyzer:
         train_status = str(train_report.get("status", "")).lower()
         if train_status not in {"error", "failed", "stopped"}:
             self._remember_seen_articles(
-                [str(getattr(a, "id", "") or "") for a in new_articles[:max_samples]]
+                [
+                    str(getattr(a, "id", "") or "")
+                    for a in collected_new_articles[:max_samples]
+                ]
             )
 
         # Merge reports with accumulation stats
         report = dict(train_report)
-        report["collected_articles"] = len(new_articles)
-        report["new_articles"] = len(new_articles)
+        report["collected_articles"] = len(collected_new_articles)
+        report["new_articles"] = len(collected_new_articles)
+        report["fallback_articles"] = len(fallback_articles)
         report["historical_articles"] = len(historical_articles)
         report["total_training_articles"] = len(training_articles)
+        report["used_historical_fallback"] = bool(used_historical_fallback)
         report["collection_stats"] = collection_stats
+        report["query_count"] = int(
+            collection_stats.get("queries_used", collection_stats.get("query_count", 0))
+            or 0
+        )
+        report["train_status"] = train_status
+        report["effective_trained"] = bool(
+            train_status == "trained"
+            or report.get("calibrator_ready")
+            or report.get("hybrid_nn_ready")
+        )
         report["china_direct_mode"] = bool(env_flag("TRADING_CHINA_DIRECT", "0"))
         report["accumulation_enabled"] = bool(accumulate_training_data)
         report["corpus_boost_ratio"] = float(corpus_boost_ratio)
@@ -3431,7 +4119,14 @@ class LLM_sentimentAnalyzer:
                 if corpus_stats_before else 0
             )
 
-        _emit(100, "Auto training completed.", "complete")
+        if report.get("effective_trained"):
+            _emit(100, "Auto training completed.", "complete")
+        else:
+            _emit(
+                100,
+                f"Training finished with status={train_status or 'unknown'}.",
+                "complete",
+            )
         self._write_training_status(report)
         return report
 

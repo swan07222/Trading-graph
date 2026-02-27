@@ -100,8 +100,12 @@ china-full = [
   "chinesecalendar>=0.1.8",
   "cn2an>=0.5.20",
 ]
-# NLP removed - all text embeddings are self-trained
-nlp = []
+# Local transformer chat stack (self-trained)
+nlp = [
+  "transformers>=4.46.0,<5.0.0",
+  "tokenizers>=0.20.0,<1.0.0",
+  "safetensors>=0.4.0,<1.0.0",
+]
 gui = [
   "PyQt6>=6.6.0,<7.0.0",
   "pyqtgraph>=0.13.0,<1.0.0",

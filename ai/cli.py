@@ -25,8 +25,14 @@ log = get_logger(__name__)
 
 @click.group(invoke_without_command=True)
 @click.option("--config", "-c", type=click.Path(exists=True), help="Config file path")
-@click.option("--model", "-m", default="qwen2.5:7b", help="LLM model name")
-@click.option("--backend", "-b", default="ollama", type=click.Choice(["ollama", "llama_cpp", "vllm"]), help="LLM backend")
+@click.option("--model", "-m", default="self-chat-transformer", help="LLM model name")
+@click.option(
+    "--backend",
+    "-b",
+    default="transformers_local",
+    type=click.Choice(["transformers_local", "ollama", "llama_cpp", "vllm"]),
+    help="LLM backend",
+)
 @click.option("--host", default="127.0.0.1", help="LLM server host")
 @click.option("--port", "-p", default=11434, help="LLM server port")
 @click.option("--security", "-s", default="high", type=click.Choice(["none", "low", "medium", "high", "maximum"]), help="Security level")
@@ -62,8 +68,8 @@ def cli(ctx, config, model, backend, host, port, security, quiet):
 def interactive(ctx):
     """Start interactive chat mode."""
     config_file = ctx.obj.get("config_file")
-    model = ctx.obj.get("model", "qwen2.5:7b")
-    backend = ctx.obj.get("backend", "ollama")
+    model = ctx.obj.get("model", "self-chat-transformer")
+    backend = ctx.obj.get("backend", "transformers_local")
     host = ctx.obj.get("host", "127.0.0.1")
     port = ctx.obj.get("port", 11434)
     security = ctx.obj.get("security", "high")
@@ -183,8 +189,8 @@ def interactive(ctx):
 @click.pass_context
 def chat(ctx, message, confirm):
     """Send a single chat message."""
-    model = ctx.obj.get("model", "qwen2.5:7b")
-    backend = ctx.obj.get("backend", "ollama")
+    model = ctx.obj.get("model", "self-chat-transformer")
+    backend = ctx.obj.get("backend", "transformers_local")
     host = ctx.obj.get("host", "127.0.0.1")
     port = ctx.obj.get("port", 11434)
     security = ctx.obj.get("security", "high")
@@ -226,8 +232,8 @@ def chat(ctx, message, confirm):
 @click.pass_context
 def command(ctx, command_text, confirm):
     """Execute a trading command directly."""
-    model = ctx.obj.get("model", "qwen2.5:7b")
-    backend = ctx.obj.get("backend", "ollama")
+    model = ctx.obj.get("model", "self-chat-transformer")
+    backend = ctx.obj.get("backend", "transformers_local")
     host = ctx.obj.get("host", "127.0.0.1")
     port = ctx.obj.get("port", 11434)
     
@@ -267,8 +273,8 @@ def command(ctx, command_text, confirm):
 @click.pass_context
 def health(ctx):
     """Check system health."""
-    model = ctx.obj.get("model", "qwen2.5:7b")
-    backend = ctx.obj.get("backend", "ollama")
+    model = ctx.obj.get("model", "self-chat-transformer")
+    backend = ctx.obj.get("backend", "transformers_local")
     host = ctx.obj.get("host", "127.0.0.1")
     port = ctx.obj.get("port", 11434)
     
@@ -300,6 +306,30 @@ def health(ctx):
         await controller.shutdown()
     
     asyncio.run(run_health())
+
+
+@cli.command("train-self-chat")
+@click.option("--chat-history", default="data/chat_history/chat_history.json", help="Chat history JSON path")
+@click.option("--epochs", default=2, type=int, help="Training epochs")
+@click.option("--max-steps", default=1200, type=int, help="Max optimizer steps")
+def train_self_chat(chat_history, epochs, max_steps):
+    """Train a self-owned local transformer chat model."""
+    from ai.self_chat_trainer import SelfChatTrainingConfig, train_self_chat_model
+
+    cfg = SelfChatTrainingConfig.from_defaults()
+    cfg.chat_history_path = Path(str(chat_history))
+    cfg.epochs = max(1, int(epochs))
+    cfg.max_steps = max(100, int(max_steps))
+
+    print("Training self chat transformer...")
+    print(f"- chat history: {cfg.chat_history_path}")
+    print(f"- output dir: {cfg.output_dir}")
+    print(f"- epochs: {cfg.epochs}")
+    print(f"- max steps: {cfg.max_steps}")
+    print("")
+
+    report = train_self_chat_model(cfg)
+    print(json.dumps(report, indent=2, ensure_ascii=False))
 
 
 @cli.command()

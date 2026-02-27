@@ -411,4 +411,45 @@ def test_auto_train_historical_fallback(
     assert report["status"] == "trained"
     # Check that collection_stats indicates historical fallback was used
     assert report.get("collection_stats", {}).get("used_historical_fallback", False) is True
+    assert int(report.get("collected_articles", 0)) == 1
+    assert int(report.get("new_articles", 0)) == 1
+    assert int(report.get("fallback_articles", 0)) >= 5
+    assert int(report.get("historical_articles", 0)) == 0
     assert report["trained_samples"] >= 5
+
+
+def test_auto_train_reports_query_count_from_collection_stats(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    analyzer = llm_module.LLM_sentimentAnalyzer(cache_dir=tmp_path)
+
+    monkeypatch.setattr(
+        analyzer,
+        "collect_llm_corpus",
+        lambda **kwargs: (
+            [_sample_article("new-1", hours_ago=1)],
+            {"collected": 1, "queries_used": 7},
+        ),
+    )
+    monkeypatch.setattr(
+        analyzer,
+        "train",
+        lambda rows, **kwargs: {
+            "status": "trained",
+            "trained_samples": len(rows),
+            "calibrator_ready": True,
+            "hybrid_nn_ready": True,
+        },
+    )
+
+    report = analyzer.auto_train_from_internet(
+        hours_back=24,
+        max_samples=40,
+        min_new_articles=1,
+        accumulate_training_data=False,
+        only_new=True,
+    )
+
+    assert report["status"] == "trained"
+    assert int(report.get("query_count", 0)) == 7

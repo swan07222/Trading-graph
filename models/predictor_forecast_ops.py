@@ -1145,7 +1145,7 @@ def _build_prediction_bands(self, pred: Prediction) -> None:
 
 def _apply_high_precision_gate(self, pred: Prediction) -> None:
     """Optionally downgrade weak actionable predictions to HOLD."""
-    cfg = self._high_precision
+    cfg = dict(getattr(self, "_high_precision", {}) or {})
     if not cfg or cfg.get("enabled", 0.0) <= 0:
         return
     if pred.signal == Signal.HOLD:
@@ -1176,6 +1176,35 @@ def _apply_high_precision_gate(self, pred: Prediction) -> None:
     edge = abs(float(pred.prob_up) - float(pred.prob_down))
     if edge < cfg["min_edge"]:
         reasons.append(f"edge {edge:.2f} < {cfg['min_edge']:.2f}")
+    min_strength = float(cfg.get("min_signal_strength", 0.62))
+    if float(np.clip(pred.signal_strength, 0.0, 1.0)) < min_strength:
+        reasons.append(
+            f"strength {pred.signal_strength:.2f} < {min_strength:.2f}"
+        )
+    min_margin = float(cfg.get("min_model_margin", 0.04))
+    margin_value = float(
+        np.clip(
+            pred.model_margin
+            if float(getattr(pred, "model_margin", 0.0) or 0.0) > 0
+            else edge,
+            0.0,
+            1.0,
+        )
+    )
+    if margin_value < min_margin:
+        reasons.append(
+            f"margin {margin_value:.2f} < {min_margin:.2f}"
+        )
+    directional_prob = float(
+        pred.prob_up
+        if pred.signal in (Signal.BUY, Signal.STRONG_BUY)
+        else pred.prob_down
+    )
+    min_directional_prob = float(cfg.get("min_directional_prob", 0.52))
+    if directional_prob < min_directional_prob:
+        reasons.append(
+            f"directional_prob {directional_prob:.2f} < {min_directional_prob:.2f}"
+        )
 
     if not reasons:
         return
@@ -1183,7 +1212,8 @@ def _apply_high_precision_gate(self, pred: Prediction) -> None:
     old_signal = pred.signal.value
     pred.signal = Signal.HOLD
     pred.signal_strength = min(float(pred.signal_strength), 0.49)
-    pred.warnings.append(
+    self._append_warning_once(
+        pred,
         "High Precision Mode filtered signal "
         f"{old_signal} -> HOLD ({'; '.join(reasons[:3])})"
     )
@@ -1197,15 +1227,78 @@ def _apply_runtime_signal_quality_gate(self, pred: Prediction) -> None:
 
     reasons: list[str] = []
     conf = float(np.clip(pred.confidence, 0.0, 1.0))
+    strength = float(np.clip(getattr(pred, "signal_strength", 0.0), 0.0, 1.0))
     agreement = float(np.clip(pred.model_agreement, 0.0, 1.0))
     entropy = float(np.clip(pred.entropy, 0.0, 1.0))
+    raw_margin = float(np.clip(getattr(pred, "model_margin", 0.0), 0.0, 1.0))
     edge = float(pred.prob_up) - float(pred.prob_down)
+    edge_abs = abs(edge)
+    margin = float(raw_margin if raw_margin > 0 else edge_abs)
     trend = str(pred.trend).upper()
+    atr = float(np.clip(getattr(pred, "atr_pct_value", 0.02), 0.0, 1.0))
+    directional_prob = float(
+        pred.prob_up
+        if pred.signal in (Signal.BUY, Signal.STRONG_BUY)
+        else pred.prob_down
+    )
+    neutral_prob = float(np.clip(getattr(pred, "prob_neutral", 0.34), 0.0, 1.0))
+    runtime_profile = dict(getattr(self, "_runtime_calibration_profile", {}) or {})
+    weak_validation = bool(runtime_profile.get("weak_validation", False))
+    calibration_reliability = float(
+        np.clip(runtime_profile.get("reliability_score", 1.0), 0.0, 1.0)
+    )
+    edge_floor = float(
+        0.03 + (0.05 * (1.0 - calibration_reliability))
+        if weak_validation
+        else 0.03
+    )
 
-    if pred.signal in (Signal.BUY, Signal.STRONG_BUY) and edge < 0.03:
+    if pred.signal in (Signal.BUY, Signal.STRONG_BUY) and edge < edge_floor:
         reasons.append(f"edge {edge:.2f} too weak for long")
-    if pred.signal in (Signal.SELL, Signal.STRONG_SELL) and edge > -0.03:
+    if pred.signal in (Signal.SELL, Signal.STRONG_SELL) and edge > -edge_floor:
         reasons.append(f"edge {edge:.2f} too weak for short")
+
+    strength_floor = 0.56
+    margin_floor = 0.03
+    directional_prob_floor = 0.51
+    if trend == "SIDEWAYS":
+        strength_floor += 0.08
+        margin_floor += 0.01
+        directional_prob_floor += 0.03
+    if atr >= 0.04:
+        strength_floor += 0.06
+        margin_floor += 0.01
+        directional_prob_floor += 0.02
+    if weak_validation:
+        reliability_penalty = max(0.0, 1.0 - calibration_reliability)
+        strength_floor += 0.05 * reliability_penalty
+        margin_floor += 0.02 * reliability_penalty
+        directional_prob_floor += 0.03 * reliability_penalty
+
+    if pred.signal in (Signal.STRONG_BUY, Signal.STRONG_SELL):
+        strength_floor = max(0.52, strength_floor - 0.05)
+        margin_floor = max(0.02, margin_floor - 0.01)
+
+    strength_floor = float(np.clip(strength_floor, 0.50, 0.85))
+    margin_floor = float(np.clip(margin_floor, 0.02, 0.12))
+    directional_prob_floor = float(np.clip(directional_prob_floor, 0.50, 0.70))
+
+    if strength < strength_floor and conf < 0.90:
+        reasons.append(
+            f"signal strength {strength:.2f} < {strength_floor:.2f}"
+        )
+    if margin < margin_floor and conf < 0.88:
+        reasons.append(f"model margin {margin:.2f} < {margin_floor:.2f}")
+    if directional_prob < directional_prob_floor and conf < 0.90:
+        reasons.append(
+            "directional probability "
+            f"{directional_prob:.2f} < {directional_prob_floor:.2f}"
+        )
+    if neutral_prob > 0.56 and conf < 0.86 and edge_abs < 0.14:
+        reasons.append(
+            f"neutral probability too dominant ({neutral_prob:.2f})"
+        )
+
     if agreement < 0.50 and conf < 0.78:
         reasons.append(
             f"agreement/conf weak ({agreement:.2f}/{conf:.2f})"
@@ -1226,8 +1319,31 @@ def _apply_runtime_signal_quality_gate(self, pred: Prediction) -> None:
         and conf < 0.86
     ):
         reasons.append("counter-trend long lacks conviction")
-    if pred.atr_pct_value >= 0.04 and conf < 0.76:
+    if atr >= 0.04 and conf < 0.76:
         reasons.append("high volatility requires stronger confidence")
+
+    macd = str(getattr(pred, "macd_signal", "") or "").upper()
+    rsi = float(np.clip(np.nan_to_num(getattr(pred, "rsi", 50.0), nan=50.0), 0.0, 100.0))
+    if pred.signal in (Signal.BUY, Signal.STRONG_BUY):
+        if "BEAR" in macd and conf < 0.90:
+            reasons.append("MACD disagrees with long signal")
+        if rsi >= 76.0 and conf < 0.92:
+            reasons.append(f"RSI overbought at {rsi:.0f} for long")
+    elif pred.signal in (Signal.SELL, Signal.STRONG_SELL):
+        if "BULL" in macd and conf < 0.90:
+            reasons.append("MACD disagrees with short signal")
+        if rsi <= 24.0 and conf < 0.92:
+            reasons.append(f"RSI oversold at {rsi:.0f} for short")
+
+    if weak_validation:
+        required_conf = float(
+            np.clip(0.72 + (0.16 * (1.0 - calibration_reliability)), 0.72, 0.88)
+        )
+        if conf < required_conf:
+            reasons.append(
+                "calibration reliability low "
+                f"({calibration_reliability:.2f})"
+            )
 
     if not reasons:
         return
@@ -1235,7 +1351,8 @@ def _apply_runtime_signal_quality_gate(self, pred: Prediction) -> None:
     old_signal = pred.signal.value
     pred.signal = Signal.HOLD
     pred.signal_strength = min(float(pred.signal_strength), 0.49)
-    pred.warnings.append(
+    self._append_warning_once(
+        pred,
         "Runtime quality gate filtered signal "
         f"{old_signal} -> HOLD ({'; '.join(reasons[:3])})"
     )
@@ -1552,11 +1669,40 @@ def _apply_news_influence(
     else:
         pred.confidence = float(np.clip(pred.confidence - (conf_delta * 0.6), 0.0, 1.0))
 
-    # News can upgrade HOLD when the post-blend edge is meaningful.
-    if pred.signal == Signal.HOLD and pred.confidence >= 0.56:
-        if edge >= 0.08:
+    # News can upgrade HOLD only when evidence quality is strong enough.
+    hp_cfg = dict(getattr(self, "_high_precision", {}) or {})
+    min_upgrade_conf = float(
+        np.clip(hp_cfg.get("news_hold_upgrade_min_conf", 0.68), 0.50, 0.95)
+    )
+    min_upgrade_edge = float(
+        np.clip(hp_cfg.get("news_hold_upgrade_min_edge", 0.10), 0.05, 0.30)
+    )
+    min_upgrade_count = int(
+        np.clip(hp_cfg.get("news_hold_upgrade_min_count", 6), 1, 1000)
+    )
+    min_upgrade_agreement = float(
+        np.clip(hp_cfg.get("news_hold_upgrade_min_agreement", 0.60), 0.0, 1.0)
+    )
+    max_upgrade_entropy = float(
+        np.clip(hp_cfg.get("news_hold_upgrade_max_entropy", 0.68), 0.0, 1.0)
+    )
+
+    trend = str(getattr(pred, "trend", "") or "").upper()
+    trend_allows_long = trend not in {"DOWNTREND"}
+    trend_allows_short = trend not in {"UPTREND"}
+
+    if (
+        pred.signal == Signal.HOLD
+        and pred.confidence >= min_upgrade_conf
+        and abs(news_bias) >= 0.05
+        and abs(edge) >= min_upgrade_edge
+        and int(count) >= min_upgrade_count
+        and float(np.clip(pred.model_agreement, 0.0, 1.0)) >= min_upgrade_agreement
+        and float(np.clip(pred.entropy, 0.0, 1.0)) <= max_upgrade_entropy
+    ):
+        if edge >= min_upgrade_edge and (trend_allows_long or pred.confidence >= 0.88):
             pred.signal = Signal.BUY
-        elif edge <= -0.08:
+        elif edge <= -min_upgrade_edge and (trend_allows_short or pred.confidence >= 0.88):
             pred.signal = Signal.SELL
 
     # News can also dampen contradictory directional signals.

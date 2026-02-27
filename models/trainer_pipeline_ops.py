@@ -119,12 +119,18 @@ def train(
     live_ensemble_path = CONFIG.MODEL_DIR / f"ensemble_{interval}_{horizon}.pt"
     live_scaler_path = CONFIG.MODEL_DIR / f"scaler_{interval}_{horizon}.pkl"
     live_forecast_path = CONFIG.MODEL_DIR / f"forecast_{interval}_{horizon}.pt"
+    live_calibration_path = (
+        CONFIG.MODEL_DIR / f"calibration_{interval}_{horizon}.json"
+    )
     candidate_ensemble_path = self._candidate_artifact_path(
         live_ensemble_path
     )
     candidate_scaler_path = self._candidate_artifact_path(live_scaler_path)
     candidate_forecast_path = self._candidate_artifact_path(
         live_forecast_path
+    )
+    candidate_calibration_path = self._candidate_artifact_path(
+        live_calibration_path
     )
 
     log.info("=" * 70)
@@ -497,6 +503,12 @@ def train(
             "Confidence calibration skipped: %s",
             str(calibration_report.get("reason", "unknown")),
         )
+    calibration_report = {
+        **dict(calibration_report or {}),
+        "interval": str(interval),
+        "prediction_horizon": int(horizon),
+        "trained_at": str(trained_at),
+    }
 
     if (
         X_test is not None
@@ -558,14 +570,17 @@ def train(
             "ensemble": str(live_ensemble_path),
             "scaler": str(live_scaler_path),
             "forecast": str(live_forecast_path),
+            "calibration": str(live_calibration_path),
         },
         "candidate_paths": {
             "ensemble": str(candidate_ensemble_path),
             "scaler": str(candidate_scaler_path),
             "forecast": str(candidate_forecast_path),
+            "calibration": str(candidate_calibration_path),
         },
         "promoted_artifacts": [],
         "promotion_errors": [],
+        "promotion_warnings": [],
     }
 
     if save_model:
@@ -575,6 +590,25 @@ def train(
             if self.ensemble is None:
                 raise RuntimeError("ensemble_not_initialized")
             self.ensemble.save(str(candidate_ensemble_path))
+            calibration_payload = {
+                **dict(calibration_report or {}),
+                "quality_gate_snapshot": {
+                    "passed": bool(quality_gate.get("passed", False)),
+                    "recommended_action": str(
+                        quality_gate.get(
+                            "recommended_action",
+                            "shadow_mode_recommended",
+                        )
+                    ),
+                },
+            }
+            if not self._write_json_safely(
+                candidate_calibration_path,
+                calibration_payload,
+            ):
+                deployment["promotion_warnings"].append(
+                    "calibration_candidate_save_failed"
+                )
         except Exception as e:
             deployment["reason"] = f"candidate_save_failed:{e}"
             deployment["promotion_errors"] = [
@@ -611,6 +645,20 @@ def train(
                             failed.append("forecast_promotion_failed")
                     else:
                         failed.append("forecast_candidate_missing")
+                if candidate_calibration_path.exists():
+                    if self._promote_candidate_artifact(
+                        candidate_calibration_path,
+                        live_calibration_path,
+                    ):
+                        promoted.append("calibration")
+                    else:
+                        deployment["promotion_warnings"].append(
+                            "calibration_promotion_failed"
+                        )
+                else:
+                    deployment["promotion_warnings"].append(
+                        "calibration_candidate_missing"
+                    )
 
                 deployment["promoted_artifacts"] = promoted
                 deployment["promotion_errors"] = failed

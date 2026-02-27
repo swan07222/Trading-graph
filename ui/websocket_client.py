@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -109,6 +110,8 @@ class WebSocketClient(QObject):
         self._last_message_time: datetime | None = None
         self._channels: set[str] = set()
         self._subscriptions: dict[str, list[Callable]] = {}
+        self._last_refused_log_at = 0.0
+        self._refused_log_cooldown_s = max(5, int(env_int("WEBSOCKET_REFUSED_LOG_COOLDOWN", 30)))
 
         # Statistics
         self._stats = {
@@ -270,7 +273,10 @@ class WebSocketClient(QObject):
         was_connected = self._state == ConnectionState.CONNECTED
         self._set_state(ConnectionState.DISCONNECTED)
 
-        log.info("WebSocket disconnected")
+        if was_connected:
+            log.info("WebSocket disconnected")
+        else:
+            log.debug("WebSocket disconnected before connection established")
         self.disconnected.emit()
 
         # Attempt reconnection
@@ -329,8 +335,18 @@ class WebSocketClient(QObject):
         self._stats["last_error"] = error_string
         self._set_state(ConnectionState.ERROR)
 
-        log.error(f"WebSocket error: {error_string}")
-        self.error_occurred.emit(error_string)
+        error_lower = str(error_string or "").lower()
+        refused = "connection refused" in error_lower
+        if refused:
+            now = time.monotonic()
+            if now - float(self._last_refused_log_at) >= float(self._refused_log_cooldown_s):
+                log.warning("WebSocket server unavailable: %s", error_string)
+                self._last_refused_log_at = now
+            else:
+                log.debug("WebSocket server unavailable (suppressed): %s", error_string)
+        else:
+            log.error("WebSocket error: %s", error_string)
+            self.error_occurred.emit(error_string)
 
         # Attempt reconnection
         if self.reconnect_enabled:

@@ -602,11 +602,7 @@ def _generate_ai_chat_reply(
     app_state: dict[str, Any],
     history: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Generate AI chat reply using self-trained LLM.
-    
-    Note: This uses your self-trained model from llm_sentiment.py.
-    No pre-trained models (llama/ollama/transformers) are used.
-    """
+    """Generate AI chat reply using locally trained transformer chat model."""
     try:
         from data.llm_sentiment import get_llm_analyzer
 
@@ -646,12 +642,15 @@ def _start_llm_training(self: Any) -> None:
 
     self._append_ai_chat_message(
         "System",
-        "Starting separate LLM hybrid training from recent news corpus...",
+        "Starting LLM training (MoE sentiment + self-trained chat transformer)...",
         role="system",
         level="info",
     )
     if hasattr(self, "log"):
-        self.log("Starting separate LLM hybrid training from recent news corpus...", "info")
+        self.log(
+            "Starting LLM training (MoE sentiment + self-trained chat transformer)...",
+            "info",
+        )
 
     def _work() -> dict[str, Any]:
         from data.llm_sentiment import get_llm_analyzer
@@ -660,11 +659,22 @@ def _start_llm_training(self: Any) -> None:
         analyzer = get_llm_analyzer()
         collector = get_collector()
         articles = collector.collect_news(limit=450, hours_back=120)
+        chat_report = analyzer.train_chat_model(
+            chat_history_path="data/chat_history/chat_history.json",
+            max_steps=800,
+            epochs=1,
+        )
         if articles:
             report = dict(analyzer.train(articles, max_samples=1000) or {})
             report.setdefault("collected_articles", int(len(articles)))
             report.setdefault("new_articles", int(len(articles)))
             report.setdefault("collection_mode", "direct_news")
+            report["chat_model_status"] = str(chat_report.get("status", "unknown") or "unknown")
+            report["chat_model_steps"] = int(chat_report.get("steps", 0) or 0)
+            report["chat_model_dir"] = str(chat_report.get("model_dir", "") or "")
+            chat_note = str(chat_report.get("message", "") or "").strip()
+            if chat_note:
+                report["notes"] = f"{str(report.get('notes', '')).strip()} | chat={chat_note}".strip(" |")
             return report
 
         report = analyzer.auto_train_from_internet(
@@ -679,6 +689,12 @@ def _start_llm_training(self: Any) -> None:
         )
         out = dict(report or {})
         out.setdefault("collection_mode", "auto_internet_fallback")
+        out["chat_model_status"] = str(chat_report.get("status", "unknown") or "unknown")
+        out["chat_model_steps"] = int(chat_report.get("steps", 0) or 0)
+        out["chat_model_dir"] = str(chat_report.get("model_dir", "") or "")
+        chat_note = str(chat_report.get("message", "") or "").strip()
+        if chat_note:
+            out["notes"] = f"{str(out.get('notes', '')).strip()} | chat={chat_note}".strip(" |")
         return out
 
     worker = WorkerThread(_work, timeout_seconds=1200)
@@ -705,7 +721,8 @@ def _start_llm_training(self: Any) -> None:
             f"zh={payload.get('zh_samples', 0)}, en={payload.get('en_samples', 0)}, "
             f"arch={payload.get('training_architecture', 'hybrid_neural_network')}, "
             f"collected={payload.get('collected_articles', payload.get('new_articles', 0))}, "
-            f"mode={payload.get('collection_mode', 'unknown')}."
+            f"mode={payload.get('collection_mode', 'unknown')}, "
+            f"chat_model={payload.get('chat_model_status', 'unknown')}."
         )
         notes = str(payload.get("notes", "") or "").strip()
         if notes:

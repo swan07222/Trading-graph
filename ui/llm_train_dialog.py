@@ -70,7 +70,7 @@ class LLMAutoTrainWorker(QThread):
             from data.llm_sentiment import get_llm_analyzer
 
             analyzer = get_llm_analyzer()
-            idle_seconds = max(0, int(self.config.get("idle_seconds", 3) or 3))
+            idle_seconds = max(0, int(self.config.get("idle_seconds", 10) or 10))
             train_every_cycle = bool(self.config.get("train_every_cycle", True))
             # Keep collection incremental by default: each cycle prefers new data,
             # while the analyzer can still blend historical corpus for training.
@@ -136,12 +136,17 @@ class LLMAutoTrainWorker(QThread):
                 out = dict(report or {})
                 last_report = dict(out)
                 status = str(out.get("status", "") or "").strip().lower()
+                train_status = str(out.get("train_status", status) or status).strip().lower()
                 collected = int(out.get("collected_articles", 0) or 0)
                 new_count = int(out.get("new_articles", 0) or 0)
+                fallback_count = int(out.get("fallback_articles", 0) or 0)
                 trained = int(out.get("trained_samples", 0) or 0)
                 reused_skipped = int(out.get("reused_articles_skipped", 0) or 0)
                 query_count = int(out.get("query_count", 0) or 0)
                 related_count = len(list(out.get("related_stock_codes", []) or []))
+                effective_trained = bool(
+                    out.get("effective_trained", train_status == "trained")
+                )
                 total_collected += max(0, collected)
                 total_new += max(0, new_count)
                 total_trained += max(0, trained)
@@ -150,8 +155,7 @@ class LLMAutoTrainWorker(QThread):
                 if self._stop_event.is_set() or status == "stopped":
                     break
                 if status == "no_new_data":
-                    # Use longer cooldown when sources are down to avoid log spam
-                    wait_secs = max(30, idle_seconds) if collected == 0 else max(1, idle_seconds)
+                    wait_secs = max(1, idle_seconds)
                     self.log_message.emit(
                         (
                             f"Cycle {cycle_index}: no new language data found. "
@@ -170,13 +174,36 @@ class LLMAutoTrainWorker(QThread):
                         "error",
                     )
                     break
+                if status in {"partial", "skipped"} or not effective_trained:
+                    notes = str(out.get("notes", "") or "").strip()
+                    notes_part = f" notes={notes}" if notes else ""
+                    self.log_message.emit(
+                        (
+                            f"Cycle {cycle_index} partial: collected={collected}, "
+                            f"new={new_count}, fallback={fallback_count}, trained={trained}, "
+                            f"historical={out.get('historical_articles', 0)}, "
+                            f"total_training={out.get('total_training_articles', 0)}, "
+                            f"effective_trained={int(effective_trained)}, "
+                            f"train_status={train_status or status or 'unknown'}, "
+                            f"reused_skipped={reused_skipped}, "
+                            f"only_new={int(only_new_mode)}, "
+                            f"accumulate={int(accumulate_data)}, "
+                            f"queries={query_count}, related_codes={related_count}. "
+                            f"Waiting {idle_seconds}s..."
+                            f"{notes_part}"
+                        ),
+                        "warning",
+                    )
+                    self.progress.emit(100, f"Cycle {cycle_index}: partial")
                 else:
                     self.log_message.emit(
                         (
                             f"Cycle {cycle_index} complete: collected={collected}, "
-                            f"new={new_count}, trained={trained}, "
+                            f"new={new_count}, fallback={fallback_count}, trained={trained}, "
                             f"historical={out.get('historical_articles', 0)}, "
                             f"total_training={out.get('total_training_articles', 0)}, "
+                            f"effective_trained={int(effective_trained)}, "
+                            f"train_status={train_status or status or 'unknown'}, "
                             f"reused_skipped={reused_skipped}, "
                             f"only_new={int(only_new_mode)}, "
                             f"accumulate={int(accumulate_data)}, "
@@ -235,13 +262,13 @@ class LLMTrainDialog(QDialog):
         root.setSpacing(10)
         root.setContentsMargins(12, 12, 12, 12)
 
-        title = QLabel("Auto Train LLM (Hybrid Neural Network)")
+        title = QLabel("Auto Train LLM (Mixture of Experts)")
         title.setObjectName("dialogTitle")
         root.addWidget(title)
 
         hint = QLabel(
             "Collects internet data automatically in China-direct mode and trains the LLM "
-            "hybrid model on every cycle until you press Stop."
+            "Mixture-of-Experts model on every cycle until you press Stop."
         )
         hint.setObjectName("dialogHint")
         hint.setWordWrap(True)
@@ -433,6 +460,7 @@ class LLMTrainDialog(QDialog):
             "hours_back": int(self.hours_back_spin.value()),
             "limit_per_query": int(self.limit_spin.value()),
             "max_samples": int(self.max_samples_spin.value()),
+            "idle_seconds": 10,
             "train_every_cycle": True,
             "only_new": True,
             "min_new_articles": 1,
@@ -447,13 +475,15 @@ class LLMTrainDialog(QDialog):
             (
                 f"Resuming LLM auto-training: hours_back={config['hours_back']}, "
                 f"limit_per_query={config['limit_per_query']}, "
-                f"max_samples={config['max_samples']}"
+                f"max_samples={config['max_samples']}, "
+                f"cycle_wait={config['idle_seconds']}s"
             )
             if is_resume
             else (
                 f"Starting LLM auto-training: hours_back={config['hours_back']}, "
                 f"limit_per_query={config['limit_per_query']}, "
-                f"max_samples={config['max_samples']}"
+                f"max_samples={config['max_samples']}, "
+                f"cycle_wait={config['idle_seconds']}s"
             ),
             "info",
         )

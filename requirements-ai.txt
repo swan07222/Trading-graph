@@ -1,9 +1,10 @@
 # Local LLM and AI Control Dependencies
 # Install with: pip install -r requirements-ai.txt
 
-# Note: This file now contains only AI control utilities.
-# LLM backends (Ollama, llama.cpp, vLLM) removed - use self-training instead.
-# All embeddings are self-trained from your data.
+# Self-trained local transformer chat stack (no hosted API required)
+transformers>=4.46.0,<5.0.0
+tokenizers>=0.20.0,<1.0.0
+safetensors>=0.4.0,<1.0.0
 
 # HTTP and async support
 httpx>=0.25.0                    # Async HTTP client

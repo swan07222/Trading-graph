@@ -278,6 +278,28 @@ def test_apply_news_influence_rebalances_probs_and_can_upgrade_hold() -> None:
     assert abs((pred.prob_up + pred.prob_neutral + pred.prob_down) - 1.0) < 1e-9
 
 
+def test_apply_news_influence_does_not_upgrade_hold_with_weak_context() -> None:
+    predictor = Predictor.__new__(Predictor)
+    predictor.interval = "1m"
+    predictor._get_news_sentiment = lambda *_args, **_kwargs: (0.8, 0.3, 2)
+
+    pred = Prediction(
+        stock_code="600519",
+        signal=Signal.HOLD,
+        confidence=0.66,
+        model_agreement=0.52,
+        entropy=0.74,
+        trend="SIDEWAYS",
+        prob_up=0.34,
+        prob_neutral=0.34,
+        prob_down=0.32,
+    )
+
+    predictor._apply_news_influence(pred, "600519", "1m")
+
+    assert pred.signal == Signal.HOLD
+
+
 def test_prediction_cache_is_contextual_and_immutable() -> None:
     predictor = Predictor.__new__(Predictor)
     predictor._cache_lock = threading.Lock()
@@ -929,6 +951,36 @@ def test_determine_signal_allows_neutral_class_edge_override() -> None:
 
     out = predictor._determine_signal(ensemble_pred, pred)
     assert out == Signal.BUY
+
+
+def test_determine_signal_blocks_rapid_flip_with_cooldown() -> None:
+    predictor = Predictor.__new__(Predictor)
+
+    first = Prediction(
+        stock_code="600519",
+        interval="1m",
+        trend="SIDEWAYS",
+        atr_pct_value=0.045,
+        prob_up=0.70,
+        prob_down=0.20,
+    )
+    first_ens = SimpleNamespace(confidence=0.90, predicted_class=2)
+    first_out = predictor._determine_signal(first_ens, first)
+    assert first_out in (Signal.BUY, Signal.STRONG_BUY)
+
+    second = Prediction(
+        stock_code="600519",
+        interval="1m",
+        trend="SIDEWAYS",
+        atr_pct_value=0.045,
+        prob_up=0.22,
+        prob_down=0.58,
+    )
+    second_ens = SimpleNamespace(confidence=0.82, predicted_class=0)
+    second_out = predictor._determine_signal(second_ens, second)
+
+    assert second_out == Signal.HOLD
+    assert any("flip cooldown" in w.lower() for w in second.warnings)
 
 
 def test_generate_reasons_keeps_existing_gate_warnings() -> None:

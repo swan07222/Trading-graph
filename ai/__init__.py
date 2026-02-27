@@ -16,6 +16,7 @@ from .audit_logger import AuditLogger, AuditEvent
 from .context_manager import ContextManager, ConversationTurn
 from .rag_engine import RAGEngine, KnowledgeDocument
 from .security import PromptGuard, SecurityLevel
+from .local_llm import LLMBackend, LocalLLM, LocalLLMConfig, LLMResponse
 
 __all__ = [
     "CommandParser",
@@ -31,4 +32,8 @@ __all__ = [
     "KnowledgeDocument",
     "PromptGuard",
     "SecurityLevel",
+    "LLMBackend",
+    "LocalLLM",
+    "LocalLLMConfig",
+    "LLMResponse",
 ]

@@ -117,9 +117,14 @@ class Predictor:
         self._loaded_ensemble_path: Path | None = None
         self._trained_stock_codes: list[str] = []
         self._trained_stock_last_train: dict[str, str] = {}
+        self._runtime_calibration_profile = (
+            self._default_runtime_calibration_profile()
+        )
         self._model_artifact_sig: str = ""
         self._last_model_reload_attempt_ts: float = 0.0
         self._model_reload_cooldown_s: float = 15.0
+        self._signal_memory_lock = threading.Lock()
+        self._signal_memory: dict[str, dict[str, Any]] = {}
         
         # Enhanced prediction accuracy features
         self._confidence_calibration_enabled = True
@@ -165,6 +170,42 @@ class Predictor:
             "min_agreement": float(env_text("TRADING_HP_MIN_AGREEMENT", str(min_agree_default))),
             "max_entropy": float(env_text("TRADING_HP_MAX_ENTROPY", str(max_entropy_default))),
             "min_edge": float(env_text("TRADING_HP_MIN_EDGE", str(min_edge_default))),
+            "min_signal_strength": float(
+                env_text(
+                    "TRADING_HP_MIN_SIGNAL_STRENGTH",
+                    str(float(getattr(precision_cfg, "min_signal_strength", 0.62))),
+                )
+            ),
+            "min_model_margin": float(
+                env_text(
+                    "TRADING_HP_MIN_MODEL_MARGIN",
+                    str(float(getattr(precision_cfg, "min_model_margin", 0.04))),
+                )
+            ),
+            "min_directional_prob": float(
+                env_text(
+                    "TRADING_HP_MIN_DIRECTIONAL_PROB",
+                    str(float(getattr(precision_cfg, "min_directional_prob", 0.52))),
+                )
+            ),
+            "news_hold_upgrade_min_conf": float(
+                env_text(
+                    "TRADING_HP_NEWS_HOLD_MIN_CONF",
+                    str(float(getattr(precision_cfg, "news_hold_upgrade_min_conf", 0.68))),
+                )
+            ),
+            "news_hold_upgrade_min_edge": float(
+                env_text(
+                    "TRADING_HP_NEWS_HOLD_MIN_EDGE",
+                    str(float(getattr(precision_cfg, "news_hold_upgrade_min_edge", 0.10))),
+                )
+            ),
+            "news_hold_upgrade_min_count": float(
+                env_text(
+                    "TRADING_HP_NEWS_HOLD_MIN_COUNT",
+                    str(float(getattr(precision_cfg, "news_hold_upgrade_min_count", 6.0))),
+                )
+            ),
             "regime_routing": 1.0 if bool(getattr(precision_cfg, "regime_routing", True)) else 0.0,
             "range_conf_boost": float(getattr(precision_cfg, "range_confidence_boost", 0.04)),
             "high_vol_conf_boost": float(getattr(precision_cfg, "high_vol_confidence_boost", 0.05)),
@@ -180,7 +221,18 @@ class Predictor:
                 if isinstance(data, dict):
                     prof = data.get("thresholds", data)
                     if isinstance(prof, dict):
-                        for key in ("min_confidence", "min_agreement", "max_entropy", "min_edge"):
+                        for key in (
+                            "min_confidence",
+                            "min_agreement",
+                            "max_entropy",
+                            "min_edge",
+                            "min_signal_strength",
+                            "min_model_margin",
+                            "min_directional_prob",
+                            "news_hold_upgrade_min_conf",
+                            "news_hold_upgrade_min_edge",
+                            "news_hold_upgrade_min_count",
+                        ):
                             if key in prof:
                                 cfg[key] = float(prof[key])
                         cfg["profile_loaded"] = 1.0
@@ -192,6 +244,42 @@ class Predictor:
         cfg["min_agreement"] = float(env_text("TRADING_HP_MIN_AGREEMENT", str(cfg["min_agreement"])))
         cfg["max_entropy"] = float(env_text("TRADING_HP_MAX_ENTROPY", str(cfg["max_entropy"])))
         cfg["min_edge"] = float(env_text("TRADING_HP_MIN_EDGE", str(cfg["min_edge"])))
+        cfg["min_signal_strength"] = float(
+            env_text(
+                "TRADING_HP_MIN_SIGNAL_STRENGTH",
+                str(cfg["min_signal_strength"]),
+            )
+        )
+        cfg["min_model_margin"] = float(
+            env_text(
+                "TRADING_HP_MIN_MODEL_MARGIN",
+                str(cfg["min_model_margin"]),
+            )
+        )
+        cfg["min_directional_prob"] = float(
+            env_text(
+                "TRADING_HP_MIN_DIRECTIONAL_PROB",
+                str(cfg["min_directional_prob"]),
+            )
+        )
+        cfg["news_hold_upgrade_min_conf"] = float(
+            env_text(
+                "TRADING_HP_NEWS_HOLD_MIN_CONF",
+                str(cfg["news_hold_upgrade_min_conf"]),
+            )
+        )
+        cfg["news_hold_upgrade_min_edge"] = float(
+            env_text(
+                "TRADING_HP_NEWS_HOLD_MIN_EDGE",
+                str(cfg["news_hold_upgrade_min_edge"]),
+            )
+        )
+        cfg["news_hold_upgrade_min_count"] = float(
+            env_text(
+                "TRADING_HP_NEWS_HOLD_MIN_COUNT",
+                str(cfg["news_hold_upgrade_min_count"]),
+            )
+        )
 
         if cfg["enabled"] > 0:
             log.info(
@@ -203,6 +291,26 @@ class Predictor:
                 cfg["min_edge"],
             )
         return cfg
+
+    @staticmethod
+    def _default_runtime_calibration_profile(
+        reason: str = "unavailable",
+    ) -> dict[str, Any]:
+        """Default runtime calibration profile.
+
+        Missing profiles should keep behavior unchanged (reliability=1.0).
+        """
+        return {
+            "enabled": False,
+            "reason": str(reason),
+            "sample_count": 0,
+            "reliability_score": 1.0,
+            "weak_validation": False,
+            "x_points": [],
+            "y_points": [],
+            "interval": "",
+            "prediction_horizon": 0,
+        }
 
     # =========================================================================
     # SAFETY & VALIDATION HELPERS
@@ -403,6 +511,140 @@ class Predictor:
             out.append(legacy)
         return out
 
+    def _calibration_profile_path(
+        self,
+        model_dir: Path,
+        interval: str,
+        horizon: int,
+    ) -> Path:
+        iv = self._normalize_interval_token(interval)
+        hz = int(max(1, int(horizon)))
+        return Path(model_dir) / f"calibration_{iv}_{hz}.json"
+
+    def _load_runtime_calibration_profile(
+        self,
+        model_dir: Path,
+        interval: str,
+        horizon: int,
+    ) -> dict[str, Any]:
+        """Load confidence calibration profile persisted by training."""
+        default = self._default_runtime_calibration_profile(
+            reason="profile_missing"
+        )
+        paths: list[Path] = []
+        current_interval = str(getattr(self, "interval", interval))
+        current_horizon = int(getattr(self, "horizon", horizon) or horizon)
+        requested_interval = str(
+            getattr(self, "_requested_interval", current_interval)
+        )
+        requested_horizon = int(
+            getattr(self, "_requested_horizon", current_horizon)
+            or current_horizon
+        )
+
+        for iv, hz in (
+            (interval, horizon),
+            (current_interval, current_horizon),
+            (requested_interval, requested_horizon),
+        ):
+            try:
+                p = self._calibration_profile_path(model_dir, str(iv), int(hz))
+            except (TypeError, ValueError):
+                continue
+            if p not in paths:
+                paths.append(p)
+
+        loaded_ens = getattr(self, "_loaded_ensemble_path", None)
+        if isinstance(loaded_ens, Path):
+            stem = str(loaded_ens.stem)
+            if stem.startswith("ensemble_"):
+                p = loaded_ens.with_name(
+                    f"calibration_{stem[len('ensemble_'):]}.json"
+                )
+                if p not in paths:
+                    paths.append(p)
+
+        for path in paths:
+            try:
+                if not path.exists():
+                    continue
+                raw = json.loads(path.read_text(encoding="utf-8"))
+            except _PREDICTOR_RECOVERABLE_EXCEPTIONS as e:
+                log.debug(
+                    "Runtime calibration profile load failed for %s: %s",
+                    path,
+                    e,
+                )
+                continue
+            if not isinstance(raw, dict):
+                continue
+
+            x_raw = np.asarray(raw.get("x_points", []), dtype=float).reshape(-1)
+            y_raw = np.asarray(raw.get("y_points", []), dtype=float).reshape(-1)
+            n_pts = int(min(len(x_raw), len(y_raw)))
+
+            enabled = bool(raw.get("enabled", False))
+            reason = str(raw.get("reason", "ok")).strip() or "ok"
+            if n_pts < 2:
+                enabled = False
+                reason = "invalid_map_points"
+                x_points: list[float] = []
+                y_points: list[float] = []
+            else:
+                x = np.clip(np.nan_to_num(x_raw[:n_pts], nan=0.0), 0.0, 1.0)
+                y = np.clip(np.nan_to_num(y_raw[:n_pts], nan=0.5), 0.0, 1.0)
+                order = np.argsort(x)
+                x = x[order]
+                y = y[order]
+
+                uniq_x: list[float] = []
+                uniq_y: list[float] = []
+                for xi, yi in zip(x.tolist(), y.tolist(), strict=False):
+                    if uniq_x and abs(xi - uniq_x[-1]) <= 1e-8:
+                        uniq_y[-1] = float(max(uniq_y[-1], yi))
+                    else:
+                        uniq_x.append(float(xi))
+                        uniq_y.append(float(yi))
+
+                if len(uniq_x) < 2:
+                    enabled = False
+                    reason = "degenerate_map_points"
+                    x_points = []
+                    y_points = []
+                else:
+                    if uniq_x[0] > 0.0:
+                        uniq_x.insert(0, 0.0)
+                        uniq_y.insert(0, float(uniq_y[0]))
+                    if uniq_x[-1] < 1.0:
+                        uniq_x.append(1.0)
+                        uniq_y.append(float(uniq_y[-1]))
+                    x_points = [float(v) for v in uniq_x]
+                    y_points = [float(v) for v in uniq_y]
+
+            reliability = float(
+                np.clip(raw.get("reliability_score", 1.0), 0.0, 1.0)
+            )
+            weak_validation = bool(raw.get("weak_validation", False))
+
+            profile = {
+                "enabled": bool(enabled),
+                "reason": reason,
+                "sample_count": int(raw.get("sample_count", 0) or 0),
+                "reliability_score": reliability,
+                "weak_validation": weak_validation,
+                "x_points": list(x_points),
+                "y_points": list(y_points),
+                "interval": str(
+                    raw.get("interval", self._normalize_interval_token(interval))
+                ),
+                "prediction_horizon": int(
+                    raw.get("prediction_horizon", horizon) or horizon
+                ),
+            }
+            return profile
+
+        return default
+
     def _load_models(self) -> bool:
         """Load all required models with robust fallback."""
         try:
@@ -414,6 +656,11 @@ class Predictor:
             self.feature_engine = FeatureEngine()
             self.fetcher = get_fetcher()
             self._feature_cols = self.feature_engine.get_feature_columns()
+            self._runtime_calibration_profile = (
+                self._default_runtime_calibration_profile(
+                    reason="profile_not_loaded"
+                )
+            )
 
             ensemble_model_cls: Any | None = None
             try:
@@ -537,6 +784,40 @@ class Predictor:
                         log.warning(f"Failed to load ensemble: {chosen_ens}")
             else:
                 log.warning("No ensemble model found")
+
+            calibration_interval = (
+                self._loaded_model_interval
+                if self._loaded_model_interval
+                else self.interval
+            )
+            calibration_horizon = int(
+                self._loaded_model_horizon
+                if int(self._loaded_model_horizon or 0) > 0
+                else self.horizon
+            )
+            self._runtime_calibration_profile = (
+                self._load_runtime_calibration_profile(
+                    model_dir=resolved_model_dir,
+                    interval=calibration_interval,
+                    horizon=calibration_horizon,
+                )
+            )
+            profile = dict(self._runtime_calibration_profile or {})
+            if bool(profile.get("enabled", False)):
+                log.info(
+                    "Loaded runtime calibration profile: interval=%s horizon=%s "
+                    "samples=%s reliability=%.2f weak_validation=%s",
+                    str(profile.get("interval", calibration_interval)),
+                    int(profile.get("prediction_horizon", calibration_horizon)),
+                    int(profile.get("sample_count", 0)),
+                    float(profile.get("reliability_score", 1.0)),
+                    bool(profile.get("weak_validation", False)),
+                )
+            else:
+                log.info(
+                    "Runtime calibration profile unavailable: %s",
+                    str(profile.get("reason", "unknown")),
+                )
 
             # Load forecaster (optional)
             self._load_forecaster(model_dir=resolved_model_dir)
@@ -730,9 +1011,51 @@ class Predictor:
         4. Data quality score
         5. Market regime awareness
         6. Sample size awareness (more history = more reliable)
+        7. Runtime calibration map from latest training report
         """
         if not self._confidence_calibration_enabled:
             return confidence
+
+        confidence = float(np.clip(confidence, 0.0, 1.0))
+        runtime_profile = dict(
+            getattr(self, "_runtime_calibration_profile", {}) or {}
+        )
+        profile_enabled = bool(runtime_profile.get("enabled", False))
+        weak_validation = bool(runtime_profile.get("weak_validation", False))
+        profile_reliability = float(
+            np.clip(runtime_profile.get("reliability_score", 1.0), 0.0, 1.0)
+        )
+
+        if profile_enabled:
+            x_raw = np.asarray(runtime_profile.get("x_points", []), dtype=float).reshape(-1)
+            y_raw = np.asarray(runtime_profile.get("y_points", []), dtype=float).reshape(-1)
+            n_pts = int(min(len(x_raw), len(y_raw)))
+            if n_pts >= 2:
+                x = np.clip(np.nan_to_num(x_raw[:n_pts], nan=0.0), 0.0, 1.0)
+                y = np.clip(np.nan_to_num(y_raw[:n_pts], nan=0.5), 0.0, 1.0)
+                order = np.argsort(x)
+                x = x[order]
+                y = y[order]
+                uniq_x: list[float] = []
+                uniq_y: list[float] = []
+                for xi, yi in zip(x.tolist(), y.tolist(), strict=False):
+                    if uniq_x and abs(xi - uniq_x[-1]) <= 1e-8:
+                        uniq_y[-1] = float(max(uniq_y[-1], yi))
+                    else:
+                        uniq_x.append(float(xi))
+                        uniq_y.append(float(yi))
+                if len(uniq_x) >= 2:
+                    confidence = float(
+                        np.interp(
+                            confidence,
+                            np.asarray(uniq_x, dtype=float),
+                            np.asarray(uniq_y, dtype=float),
+                        )
+                    )
+                else:
+                    profile_enabled = False
+            else:
+                profile_enabled = False
 
         # Get historical accuracy
         historical_acc = self._get_stock_accuracy(stock_code)
@@ -790,6 +1113,18 @@ class Predictor:
         }
         regime_adj = regime_adjustments.get(market_regime.upper(), 0.0)
         confidence = float(np.clip(confidence + regime_adj, 0.3, 0.95))
+
+        # Weak calibration data means confidence should be compressed toward
+        # neutral and capped so runtime gates avoid over-trusting sparse fits.
+        if profile_enabled and weak_validation:
+            shrink = float(
+                np.clip(0.55 + (0.45 * profile_reliability), 0.55, 1.0)
+            )
+            confidence = float(0.5 + ((confidence - 0.5) * shrink))
+            weak_cap = float(
+                np.clip(0.92 - (0.22 * (1.0 - profile_reliability)), 0.70, 0.92)
+            )
+            confidence = float(min(confidence, weak_cap))
 
         return float(np.clip(confidence, 0.3, 0.95))
 
@@ -1475,9 +1810,17 @@ class Predictor:
                 # Enhanced accuracy: Apply adaptive threshold for signal generation
                 if self._adaptive_threshold_enabled:
                     self._apply_adaptive_signal_threshold(pred)
+                # Confidence is adjusted after initial ensemble gating.
+                # Re-run hard gates once with final confidence/signal values.
+                self._apply_high_precision_gate(pred)
+                self._apply_runtime_signal_quality_gate(pred)
 
                 news_bias = self._apply_news_influence(pred, code, interval)
                 self._refresh_prediction_uncertainty(pred)
+                # Re-run hard guards after news blending, because news can
+                # promote/dampen directional signals.
+                self._apply_high_precision_gate(pred)
+                self._apply_runtime_signal_quality_gate(pred)
                 self._apply_tail_risk_guard(pred)
 
                 try:
@@ -1810,6 +2153,8 @@ class Predictor:
             pred.predicted_prices.append(float(px))
 
         self._refresh_prediction_uncertainty(pred)
+        self._apply_high_precision_gate(pred)
+        self._apply_runtime_signal_quality_gate(pred)
         self._apply_tail_risk_guard(pred)
         self._build_prediction_bands(pred)
 

@@ -30,8 +30,8 @@ log = get_logger(__name__)
 class ChatConfig:
     """Configuration for AI chat system."""
     # LLM settings
-    llm_backend: str = "ollama"
-    llm_model: str = "qwen2.5:7b"
+    llm_backend: str = "transformers_local"
+    llm_model: str = "self-chat-transformer"
     llm_host: str = "127.0.0.1"
     llm_port: int = 11434
     temperature: float = 0.7

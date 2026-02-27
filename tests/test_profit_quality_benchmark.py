@@ -59,6 +59,23 @@ def test_build_confidence_calibration_returns_monotonic_map() -> None:
     assert np.all(np.diff(y_pts) >= -1e-8)
 
 
+def test_build_confidence_calibration_uses_weak_validation_fallback() -> None:
+    trainer = _build_trainer()
+    X_val, y_val, _r_val, _X_test, _y_test, _r_test = _split_dataset(
+        samples=160,
+        seed=17,
+    )
+
+    report = trainer._build_confidence_calibration(X_val, y_val)
+
+    assert report["enabled"] is True
+    assert report["reason"] == "weak_validation_fallback"
+    assert report["weak_validation"] is True
+    assert 0.0 < float(report["reliability_score"]) < 0.9
+    assert len(report["x_points"]) == 2
+    assert len(report["y_points"]) == 2
+
+
 def test_walk_forward_reports_selection_metrics_with_calibration() -> None:
     trainer = _build_trainer()
     X_val, y_val, r_val, X_test, y_test, r_test = _split_dataset(samples=1500, seed=23)

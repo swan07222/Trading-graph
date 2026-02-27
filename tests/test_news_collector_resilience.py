@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -113,6 +114,77 @@ def test_fetch_caixin_falls_back_to_homepage_links(tmp_path: Path) -> None:
     assert out
     assert out[0].source == "caixin"
     assert "China Markets Open Higher" in out[0].title
+
+
+def test_fetch_sina_finance_rotates_endpoint_after_primary_404(tmp_path: Path) -> None:
+    collector = NewsCollector(cache_dir=tmp_path)
+
+    class _Session:
+        headers: dict[str, str] = {}
+        proxies: dict[str, str] = {}
+
+        @staticmethod
+        def get(url: str, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+            _ = (args, kwargs)
+            if "feed.mix.sina.com.cn/api/roll/feed" in url:
+                return _Resp(404, "")
+            if "feed.mix.sina.com.cn/api/roll/get" in url:
+                payload = {
+                    "result": {
+                        "data": [
+                            {
+                                "title": "Sina CN Market Headline",
+                                "intro": "A-share market update",
+                                "ctime": "2026-02-26 10:30:00",
+                                "url": "https://finance.sina.com.cn/roll/2026-02-26/doc-demo.shtml",
+                            }
+                        ]
+                    }
+                }
+                return _Resp(200, json.dumps(payload, ensure_ascii=False))
+            return _Resp(404, "")
+
+    collector._session = _Session()
+    out = collector._fetch_sina_finance(
+        keywords=["market"],
+        start_time=datetime(2020, 1, 1),
+        limit=5,
+    )
+
+    assert out
+    assert out[0].source == "sina_finance"
+    assert "Sina CN Market Headline" in out[0].title
+
+
+def test_fetch_sina_finance_falls_back_to_html_links(tmp_path: Path) -> None:
+    collector = NewsCollector(cache_dir=tmp_path)
+
+    class _Session:
+        headers: dict[str, str] = {}
+        proxies: dict[str, str] = {}
+
+        @staticmethod
+        def get(url: str, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+            _ = (args, kwargs)
+            if "feed.mix.sina.com.cn" in url:
+                return _Resp(404, "")
+            if "finance.sina.com.cn" in url:
+                return _Resp(
+                    200,
+                    '<a href="/roll/2026-02-26/doc-html-fallback.shtml">Sina HTML Fallback Headline</a>',
+                )
+            return _Resp(404, "")
+
+    collector._session = _Session()
+    out = collector._fetch_sina_finance(
+        keywords=["policy"],
+        start_time=datetime(2020, 1, 1),
+        limit=5,
+    )
+
+    assert out
+    assert out[0].source == "sina_finance"
+    assert "Sina HTML Fallback Headline" in out[0].title
 
 
 def test_collect_news_retries_alternative_sources_when_primary_empty(

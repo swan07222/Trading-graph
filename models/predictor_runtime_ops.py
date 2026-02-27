@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import time
 from typing import Any
 
@@ -1339,87 +1340,204 @@ def _determine_signal(self, ensemble_pred: Any, pred: Prediction) -> Signal:
     predicted_class = int(np.clip(ensemble_pred.predicted_class, 0, 2))
     edge = float(np.clip(pred.prob_up - pred.prob_down, -1.0, 1.0))
 
-    # FIX #SIG-002: Enhanced edge with probability distribution shape
-    # Consider neutral probability as edge reducer
+    # FIX #SIG-002: Enhanced edge with probability distribution shape.
     neutral_prob = float(np.clip(getattr(pred, "prob_neutral", 0.34), 0.0, 1.0))
     if neutral_prob > 0.5:
-        # High neutral = uncertain = reduce effective edge
         edge = edge * (1.0 - neutral_prob)
 
-    is_sideways = str(pred.trend).upper() == "SIDEWAYS"
+    trend = str(getattr(pred, "trend", "") or "").upper()
+    is_sideways = trend == "SIDEWAYS"
 
-    # FIX #SIG-001: Adaptive edge floor based on volatility and regime
+    # FIX #SIG-001: Adaptive edge floor based on volatility and regime.
     base_edge_floor = 0.04
     vol_adjustment = 0.0
-
-    # Higher volatility = require stronger edge
     atr_pct = float(np.clip(getattr(pred, "atr_pct_value", 0.02), 0.0, 1.0))
-    if atr_pct > 0.04:  # High volatility
+    if atr_pct > 0.04:
         vol_adjustment = 0.02
-    elif atr_pct > 0.03:  # Moderate-high volatility
+    elif atr_pct > 0.03:
         vol_adjustment = 0.01
-
-    # Sideways market = require stronger edge (whipsaw risk)
     if is_sideways:
         vol_adjustment += 0.02
-
     edge_floor = float(np.clip(base_edge_floor + vol_adjustment, 0.02, 0.15))
     strong_edge_floor = float(np.clip(max(0.12, edge_floor * 2.0), 0.10, 0.25))
 
-    # FIX #SIG-003: Entropy adjustment to confidence
+    # FIX #SIG-003: Entropy adjustment to confidence.
     entropy = float(np.clip(getattr(pred, "entropy", 0.0), 0.0, 1.0))
     effective_confidence = confidence
-    if entropy > 0.6:  # High entropy
-        # Reduce effective confidence when entropy is high
+    if entropy > 0.6:
         effective_confidence = confidence * (1.0 - (entropy - 0.6) * 0.3)
         effective_confidence = float(np.clip(effective_confidence, 0.0, 1.0))
-    elif entropy < 0.3:  # Low entropy = more certain
-        # Slight boost when entropy is very low
+    elif entropy < 0.3:
         effective_confidence = min(0.99, confidence * 1.02)
 
-    # FIX #SIG-004: Add hysteresis to prevent signal oscillation
-    # Track previous signal if available
-    prev_signal = getattr(pred, "_prev_signal", None)
-    signal_threshold_buffer = 0.02  # 2% buffer for hysteresis
-    
-    # Apply signal logic with effective confidence
+    raw_code = str(getattr(pred, "stock_code", "") or "").strip()
+    try:
+        code = str(self._clean_code(raw_code)).strip()
+    except _PREDICTOR_RECOVERABLE_EXCEPTIONS:
+        digits = "".join(ch for ch in raw_code if ch.isdigit())
+        code = digits.zfill(6) if digits else raw_code
+    interval = str(
+        getattr(pred, "interval", getattr(self, "interval", "1m")) or "1m"
+    )
+    try:
+        interval = str(self._normalize_interval_token(interval))
+    except _PREDICTOR_RECOVERABLE_EXCEPTIONS:
+        interval = str(interval).lower()
+
+    signal_key = f"{code}:{interval}" if code else ""
+    if (
+        not hasattr(self, "_signal_memory_lock")
+        or getattr(self, "_signal_memory_lock", None) is None
+    ):
+        self._signal_memory_lock = threading.Lock()
+    if (
+        not hasattr(self, "_signal_memory")
+        or not isinstance(getattr(self, "_signal_memory", None), dict)
+    ):
+        self._signal_memory = {}
+
+    prev_signal: Signal | None = None
+    prev_direction = "hold"
+    last_flip_ts = 0.0
+    last_signal_ts = 0.0
+    state: dict[str, Any] = {}
+    if signal_key:
+        with self._signal_memory_lock:
+            state = dict(self._signal_memory.get(signal_key, {}) or {})
+        prev_raw = str(state.get("signal", "") or "").upper()
+        if prev_raw:
+            try:
+                prev_signal = Signal(prev_raw)
+            except ValueError:
+                prev_signal = None
+        prev_direction = str(state.get("direction", "hold") or "hold").lower()
+        try:
+            last_flip_ts = float(state.get("last_flip_ts", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            last_flip_ts = 0.0
+        try:
+            last_signal_ts = float(state.get("ts", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            last_signal_ts = 0.0
+    else:
+        prev_signal = getattr(pred, "_prev_signal", None)
+
+    signal_threshold_buffer = 0.02
+    candidate = Signal.HOLD
+
+    # Apply signal logic with effective confidence.
     if predicted_class == 2:  # UP
-        if edge < edge_floor:
-            return Signal.HOLD
-        if effective_confidence >= float(CONFIG.STRONG_BUY_THRESHOLD):
-            if edge >= strong_edge_floor:
-                return Signal.STRONG_BUY
-            return Signal.BUY
-        elif effective_confidence >= float(CONFIG.BUY_THRESHOLD):
-            return Signal.BUY
+        if edge >= edge_floor:
+            if effective_confidence >= float(CONFIG.STRONG_BUY_THRESHOLD):
+                candidate = (
+                    Signal.STRONG_BUY if edge >= strong_edge_floor else Signal.BUY
+                )
+            elif effective_confidence >= float(CONFIG.BUY_THRESHOLD):
+                candidate = Signal.BUY
     elif predicted_class == 0:  # DOWN
-        if edge > -edge_floor:
-            return Signal.HOLD
-        if effective_confidence >= float(CONFIG.STRONG_SELL_THRESHOLD):
-            if edge <= -strong_edge_floor:
-                return Signal.STRONG_SELL
-            return Signal.SELL
-        elif effective_confidence >= float(CONFIG.SELL_THRESHOLD):
-            return Signal.SELL
-    else:  # NEUTRAL class: allow edge override when probabilities disagree.
+        if edge <= -edge_floor:
+            if effective_confidence >= float(CONFIG.STRONG_SELL_THRESHOLD):
+                candidate = (
+                    Signal.STRONG_SELL if edge <= -strong_edge_floor else Signal.SELL
+                )
+            elif effective_confidence >= float(CONFIG.SELL_THRESHOLD):
+                candidate = Signal.SELL
+    else:  # Neutral class: allow edge override when probabilities disagree.
         edge_override_floor = edge_floor + 0.04
         if effective_confidence >= max(float(CONFIG.BUY_THRESHOLD), 0.60):
             if edge >= edge_override_floor:
-                return Signal.BUY
-            if edge <= -edge_override_floor:
-                return Signal.SELL
+                candidate = Signal.BUY
+            elif edge <= -edge_override_floor:
+                candidate = Signal.SELL
 
-    # FIX #SIG-004: Hysteresis - prefer holding if we had a recent signal
-    # and conditions are only slightly degraded
-    if prev_signal in (Signal.BUY, Signal.STRONG_BUY, Signal.SELL, Signal.STRONG_SELL):
-        # Check if we're close to the threshold (within buffer)
+    # FIX #SIG-004: Hysteresis using persisted previous signal state.
+    if (
+        candidate == Signal.HOLD
+        and prev_signal
+        in (Signal.BUY, Signal.STRONG_BUY, Signal.SELL, Signal.STRONG_SELL)
+    ):
         was_bullish = prev_signal in (Signal.BUY, Signal.STRONG_BUY)
-        if was_bullish and edge >= (edge_floor - signal_threshold_buffer) and effective_confidence >= 0.45:
-            return Signal.BUY if edge >= 0 else Signal.HOLD
-        elif not was_bullish and edge <= (-edge_floor + signal_threshold_buffer) and effective_confidence >= 0.45:
-            return Signal.SELL if edge < 0 else Signal.HOLD
+        if (
+            was_bullish
+            and edge >= (edge_floor - signal_threshold_buffer)
+            and effective_confidence >= 0.45
+        ):
+            candidate = Signal.BUY if edge >= 0 else Signal.HOLD
+        elif (
+            (not was_bullish)
+            and edge <= (-edge_floor + signal_threshold_buffer)
+            and effective_confidence >= 0.45
+        ):
+            candidate = Signal.SELL if edge < 0 else Signal.HOLD
 
-    return Signal.HOLD
+    # Behavioral guard: avoid rapid side flips unless edge and confidence are
+    # clearly strong.
+    now = time.monotonic()
+    candidate_direction = "hold"
+    if candidate in (Signal.BUY, Signal.STRONG_BUY):
+        candidate_direction = "buy"
+    elif candidate in (Signal.SELL, Signal.STRONG_SELL):
+        candidate_direction = "sell"
+
+    try:
+        intraday = bool(self._is_intraday_interval(interval))
+    except _PREDICTOR_RECOVERABLE_EXCEPTIONS:
+        intraday = True
+
+    flip_cooldown_s = 45.0 if intraday else 1800.0
+    if is_sideways or atr_pct >= 0.04:
+        flip_cooldown_s *= 2.0
+
+    if (
+        candidate_direction in {"buy", "sell"}
+        and prev_direction in {"buy", "sell"}
+        and candidate_direction != prev_direction
+    ):
+        ref_ts = float(last_flip_ts if last_flip_ts > 0 else last_signal_ts)
+        elapsed = max(0.0, now - ref_ts)
+        edge_strength = abs(float(edge))
+        strong_reversal = (
+            effective_confidence >= 0.93
+            and edge_strength >= (strong_edge_floor * 2.0)
+        )
+        if elapsed < flip_cooldown_s and not strong_reversal:
+            candidate = Signal.HOLD
+            remaining = int(max(1.0, round(flip_cooldown_s - elapsed)))
+            append_once = getattr(self, "_append_warning_once", None)
+            if callable(append_once):
+                append_once(
+                    pred,
+                    "Signal flip cooldown blocked rapid reversal "
+                    f"({remaining}s remaining)",
+                )
+
+    if signal_key:
+        new_direction = "hold"
+        if candidate in (Signal.BUY, Signal.STRONG_BUY):
+            new_direction = "buy"
+        elif candidate in (Signal.SELL, Signal.STRONG_SELL):
+            new_direction = "sell"
+
+        if (
+            new_direction in {"buy", "sell"}
+            and prev_direction in {"buy", "sell"}
+            and new_direction != prev_direction
+        ):
+            state["last_flip_ts"] = float(now)
+        state["signal"] = candidate.value
+        state["direction"] = new_direction
+        state["ts"] = float(now)
+        with self._signal_memory_lock:
+            self._signal_memory[signal_key] = state
+            if len(self._signal_memory) > 4096:
+                stale_keys = sorted(
+                    self._signal_memory.items(),
+                    key=lambda kv: float((kv[1] or {}).get("ts", 0.0)),
+                )[:1024]
+                for k, _ in stale_keys:
+                    self._signal_memory.pop(k, None)
+
+    return candidate
 
 def _calculate_signal_strength(self, ensemble_pred: Any, pred: Prediction) -> float:
     """Calculate signal strength 0-1."""
@@ -1484,6 +1602,9 @@ def _calculate_position(self, pred: Prediction) -> PositionSize:
         return PositionSize()
 
     risk_pct = float(CONFIG.RISK_PER_TRADE) / 100.0
+    if risk_pct <= 0:
+        return PositionSize()
+
     quality_scale = self._quality_scale(pred)
     edge = self._expected_edge(pred, price, stop_distance, reward_distance)
     rr_ratio = reward_distance / max(stop_distance, 1e-9)
@@ -1495,12 +1616,27 @@ def _calculate_position(self, pred: Prediction) -> PositionSize:
             expected_edge_pct=edge * 100.0,
             risk_reward_ratio=rr_ratio,
         )
+    if quality_scale < 0.35 and float(np.clip(pred.confidence, 0.0, 1.0)) < 0.75:
+        return PositionSize(
+            expected_edge_pct=edge * 100.0,
+            risk_reward_ratio=rr_ratio,
+        )
 
     edge_scale = 1.0
     if min_edge > 0:
         edge_scale = float(np.clip(edge / min_edge, 0.0, CONFIG.risk.max_position_scale))
 
-    risk_amount = self.capital * risk_pct * quality_scale * edge_scale
+    tail_risk = float(np.clip(getattr(pred, "tail_risk_score", 0.5), 0.0, 1.0))
+    uncertainty = float(np.clip(getattr(pred, "uncertainty_score", 0.5), 0.0, 1.0))
+    if tail_risk >= 0.78 or uncertainty >= 0.86:
+        return PositionSize(
+            expected_edge_pct=edge * 100.0,
+            risk_reward_ratio=rr_ratio,
+        )
+
+    risk_dampen = (1.0 - (0.50 * tail_risk)) * (1.0 - (0.35 * uncertainty))
+    risk_dampen = float(np.clip(risk_dampen, 0.25, 1.0))
+    risk_amount = self.capital * risk_pct * quality_scale * edge_scale * risk_dampen
 
     lot_size = max(1, CONFIG.LOT_SIZE)
 
@@ -1508,16 +1644,39 @@ def _calculate_position(self, pred: Prediction) -> PositionSize:
     shares = (shares // lot_size) * lot_size
 
     if shares < lot_size:
-        shares = lot_size
+        return PositionSize(
+            expected_edge_pct=edge * 100.0,
+            risk_reward_ratio=rr_ratio,
+        )
 
     max_value = self.capital * (CONFIG.MAX_POSITION_PCT / 100)
     if shares * price > max_value:
         shares = int(max_value / price)
         shares = (shares // lot_size) * lot_size
 
-    # Final guard: ensure shares > 0 and affordable
+    if shares < lot_size:
+        return PositionSize(
+            expected_edge_pct=edge * 100.0,
+            risk_reward_ratio=rr_ratio,
+        )
+
+    max_risk_amount = self.capital * risk_pct
+    realized_risk = float(shares * stop_distance)
+    if realized_risk > (max_risk_amount * 1.05):
+        capped_shares = int(max_risk_amount / max(stop_distance, 1e-9))
+        capped_shares = (capped_shares // lot_size) * lot_size
+        if capped_shares < lot_size:
+            return PositionSize(
+                expected_edge_pct=edge * 100.0,
+                risk_reward_ratio=rr_ratio,
+            )
+        shares = capped_shares
+
     if shares <= 0:
-        shares = lot_size
+        return PositionSize(
+            expected_edge_pct=edge * 100.0,
+            risk_reward_ratio=rr_ratio,
+        )
 
     if shares * price > self.capital:
         # Can't afford even one lot

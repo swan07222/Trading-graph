@@ -33,6 +33,20 @@ from core.symbols import clean_code
 from data.fetcher import DataFetcher, get_fetcher
 from data.fetcher_config import FetcherConfig, get_config
 from data.progressive_loader import ProgressiveDataLoader, LoadResult, LoadStatus, get_progressive_loader
+from data.fetcher_sources import BARS_PER_DAY, _INTRADAY_INTERVALS
+try:
+    from data.rate_limiter_enhanced import (
+        acquire_rate_limit as _acquire_rate_limit,
+    )
+    from data.rate_limiter_enhanced import (
+        record_api_failure as _record_api_failure,
+    )
+    from data.rate_limiter_enhanced import (
+        record_api_success as _record_api_success,
+    )
+    _HAS_ENHANCED_RATE_LIMITING = True
+except ImportError:
+    _HAS_ENHANCED_RATE_LIMITING = False
 from data.source_health import (
     DataSourceHealthMonitor,
     SourceHealthStatus,
@@ -198,6 +212,15 @@ class UnifiedDataFetcher:
         self._health_monitor = get_health_monitor()
         self._progressive_loader = get_progressive_loader()
         
+        # In-memory result cache with explicit versioning.
+        self._result_cache: dict[str, tuple[pd.DataFrame, float]] = {}
+        self._result_cache_lock = threading.RLock()
+        self._result_cache_limit = max(50, int(self._config.cache.max_cache_size))
+        
+        # Last-known-good snapshots for graceful degradation on transient failures.
+        self._last_good: dict[str, pd.DataFrame] = {}
+        self._last_good_lock = threading.RLock()
+        
         # Metrics
         self._metrics = {
             "total_requests": 0,
@@ -208,6 +231,160 @@ class UnifiedDataFetcher:
             "total_time_ms": 0.0,
         }
         self._metrics_lock = threading.Lock()
+    
+    @staticmethod
+    def _normalize_interval_token(interval: str) -> str:
+        """Normalize interval string to canonical lowercase token."""
+        return str(interval or "1d").strip().lower()
+    
+    def _resolve_requested_bars(self, options: FetchOptions) -> int:
+        """Resolve requested bars for direct fetch paths."""
+        if options.bars is not None:
+            return max(1, int(options.bars))
+        if options.days is not None:
+            iv = self._normalize_interval_token(options.interval)
+            bars_per_day = float(BARS_PER_DAY.get(iv, 1.0) or 1.0)
+            return max(1, int(max(1.0, float(options.days)) * bars_per_day))
+        iv = self._normalize_interval_token(options.interval)
+        if iv in _INTRADAY_INTERVALS:
+            return max(1, int(self._config.data_loading.min_bars_intraday))
+        return max(1, int(self._config.data_loading.min_bars_daily))
+    
+    def _resolve_cache_ttl_seconds(self, options: FetchOptions) -> float:
+        """Resolve per-request cache TTL in seconds."""
+        if options.cache_ttl is not None:
+            return max(1.0, float(options.cache_ttl))
+        iv = self._normalize_interval_token(options.interval)
+        if iv in {"1d", "1wk", "1mo"}:
+            return max(1.0, float(self._config.cache.daily_ttl))
+        return max(1.0, float(self._config.cache.intraday_ttl))
+    
+    def _build_cache_key(
+        self,
+        code: str,
+        options: FetchOptions,
+        requested_bars: int,
+    ) -> str:
+        """Build versioned cache key for unified fetch responses."""
+        version = int(self._config.cache.cache_version)
+        iv = self._normalize_interval_token(options.interval)
+        source = str(options.preferred_source or "auto").strip().lower()
+        return f"v{version}:{code}:{iv}:{requested_bars}:{source}"
+    
+    def _get_cached_result(
+        self,
+        cache_key: str,
+        ttl_seconds: float,
+    ) -> pd.DataFrame | None:
+        """Get cached result if fresh enough."""
+        now = float(time.time())
+        with self._result_cache_lock:
+            entry = self._result_cache.get(cache_key)
+            if not entry:
+                return None
+            df, written_at = entry
+            if (now - float(written_at)) > float(ttl_seconds):
+                self._result_cache.pop(cache_key, None)
+                return None
+            return df.copy()
+    
+    def _set_cached_result(
+        self,
+        cache_key: str,
+        df: pd.DataFrame | None,
+    ) -> None:
+        """Store result in bounded in-memory cache."""
+        if df is None or df.empty:
+            return
+        with self._result_cache_lock:
+            if cache_key in self._result_cache:
+                self._result_cache.pop(cache_key, None)
+            self._result_cache[cache_key] = (df.copy(), float(time.time()))
+            while len(self._result_cache) > self._result_cache_limit:
+                oldest_key = next(iter(self._result_cache))
+                self._result_cache.pop(oldest_key, None)
+    
+    def _last_good_key(self, code: str, interval: str) -> str:
+        iv = self._normalize_interval_token(interval)
+        return f"{code}:{iv}"
+    
+    def _save_last_good(self, code: str, interval: str, df: pd.DataFrame | None) -> None:
+        """Persist last-known-good frame for graceful fallback."""
+        if df is None or df.empty:
+            return
+        key = self._last_good_key(code, interval)
+        with self._last_good_lock:
+            self._last_good[key] = df.copy()
+    
+    def _get_last_good(self, code: str, interval: str) -> pd.DataFrame | None:
+        """Get last-known-good frame for symbol/interval."""
+        key = self._last_good_key(code, interval)
+        with self._last_good_lock:
+            cached = self._last_good.get(key)
+            return cached.copy() if isinstance(cached, pd.DataFrame) else None
+    
+    def _is_intraday(self, interval: str) -> bool:
+        return self._normalize_interval_token(interval) in _INTRADAY_INTERVALS
+    
+    def _is_stale_intraday_frame(
+        self,
+        df: pd.DataFrame | None,
+        interval: str,
+    ) -> bool:
+        """Best-effort stale check for cached intraday bars."""
+        if df is None or df.empty or (not self._is_intraday(interval)):
+            return False
+        if not isinstance(df.index, pd.DatetimeIndex):
+            return False
+        try:
+            last_ts = pd.Timestamp(df.index.max()).to_pydatetime()
+        except Exception:
+            return False
+        now_sh = self._timezone_converter.to_shanghai(datetime.now())
+        last_sh = self._timezone_converter.to_shanghai(last_ts)
+        age_seconds = max(0.0, float((now_sh - last_sh).total_seconds()))
+        iv = self._normalize_interval_token(interval)
+        interval_minutes = {
+            "1m": 1,
+            "2m": 2,
+            "3m": 3,
+            "5m": 5,
+            "15m": 15,
+            "30m": 30,
+            "60m": 60,
+            "1h": 60,
+        }.get(iv, 1)
+        max_age_seconds = max(120.0, float(interval_minutes) * 60.0 * 6.0)
+        if self._session_checker.is_market_open(now_sh) and age_seconds > max_age_seconds:
+            return True
+        return False
+    
+    @staticmethod
+    def _classify_status(
+        bars_loaded: int,
+        bars_requested: int,
+        partial_threshold: float,
+    ) -> LoadStatus:
+        """Convert bar completeness to a load status."""
+        if bars_loaded <= 0:
+            return LoadStatus.FAILED
+        ratio = float(bars_loaded) / max(1.0, float(bars_requested))
+        if ratio >= 0.9:
+            return LoadStatus.COMPLETE
+        if ratio >= max(0.05, float(partial_threshold)):
+            return LoadStatus.PARTIAL
+        return LoadStatus.INSUFFICIENT
+    
+    @staticmethod
+    def _parse_status_code(error_text: str) -> int:
+        """Extract representative HTTP status code from an error string."""
+        text = str(error_text or "").lower()
+        if ("429" in text) or ("rate limit" in text) or ("throttl" in text):
+            return 429
+        for code in (500, 502, 503, 504):
+            if str(code) in text:
+                return code
+        return 0
     
     def get_history(
         self,
@@ -253,9 +430,13 @@ class UnifiedDataFetcher:
         """
         start_time = time.time()
         options = options or FetchOptions()
+        source: str | None = None
         
         # Clean code
         code = clean_code(code)
+        requested_bars = self._resolve_requested_bars(options)
+        cache_ttl_seconds = self._resolve_cache_ttl_seconds(options)
+        cache_key = self._build_cache_key(code, options, requested_bars)
         
         # Generate correlation ID for tracking
         correlation_id = options.correlation_id or f"fetch_{int(time.time() * 1000) % 1000000}"
@@ -272,6 +453,39 @@ class UnifiedDataFetcher:
         warnings: list[str] = []
         
         try:
+            # Phase 0: Request-level cache lookup with explicit versioning
+            if options.use_cache and (not options.force_refresh):
+                cached_df = self._get_cached_result(cache_key, cache_ttl_seconds)
+                if isinstance(cached_df, pd.DataFrame) and not cached_df.empty:
+                    cached_df = ensure_shanghai_datetime(cached_df)
+                    if self._is_stale_intraday_frame(cached_df, options.interval):
+                        warnings.append("Cached intraday frame is stale; refreshing")
+                    else:
+                        load_time_ms = (time.time() - start_time) * 1000
+                        cached_status = self._classify_status(
+                            bars_loaded=len(cached_df),
+                            bars_requested=requested_bars,
+                            partial_threshold=options.partial_threshold,
+                        )
+                        out = FetchResult(
+                            success=True,
+                            data=cached_df,
+                            bars_loaded=len(cached_df),
+                            bars_requested=requested_bars,
+                            quality_score=self._calculate_quality_score(cached_df, options.interval),
+                            load_time_ms=load_time_ms,
+                            source_used="unified_cache",
+                            cache_hit=True,
+                            validation_result=None,
+                            load_status=cached_status,
+                            warnings=warnings,
+                        )
+                        with self._metrics_lock:
+                            self._metrics["successful_requests"] += 1
+                            self._metrics["cache_hits"] += 1
+                            self._metrics["total_time_ms"] += load_time_ms
+                        return out
+            
             # Phase 1: Select healthy source
             source = self._select_source(options.preferred_source)
             if source is None and options.auto_failover:
@@ -281,7 +495,14 @@ class UnifiedDataFetcher:
                         self._metrics["failovers"] += 1
                     warnings.append(f"Auto-failover to source: {source}")
             
-            # Phase 2: Progressive loading
+            # Optional external rate-limit gate (best effort).
+            if _HAS_ENHANCED_RATE_LIMITING and source:
+                timeout = float(options.timeout_seconds or self._config.timeout.total_timeout)
+                acquired = _acquire_rate_limit(source, timeout=max(1.0, timeout))
+                if not acquired:
+                    raise RuntimeError(f"Rate limit acquisition timed out for source={source}")
+            
+            # Phase 2: Progressive/direct loading
             if options.progressive:
                 result = self._fetch_progressive(code, options, source)
             else:
@@ -301,20 +522,86 @@ class UnifiedDataFetcher:
                 
                 if validation_result.score < options.min_quality_score:
                     result.success = False
-                    result.error = f"Quality score {validation_result.score:.2f} below threshold {options.min_quality_score}"
+                    result.error = (
+                        f"Quality score {validation_result.score:.2f} "
+                        f"below threshold {options.min_quality_score}"
+                    )
+                result.validation_result = validation_result
             
-            # Phase 4: Trading hours filtering
-            if options.filter_trading_hours_only and result.data is not None:
+            # Phase 4: Trading session normalization/filtering
+            should_filter = bool(options.filter_trading_hours_only) or (
+                bool(self._config.timezone.filter_non_trading)
+                and self._is_intraday(options.interval)
+            )
+            if should_filter and result.data is not None and not result.data.empty:
                 result.data = filter_trading_hours(result.data)
             
             # Phase 5: Timezone normalization
-            if result.data is not None:
+            if result.data is not None and not result.data.empty:
                 result.data = ensure_shanghai_datetime(result.data)
+                result.bars_loaded = len(result.data)
+            
+            # Phase 6: Partial-data policy enforcement
+            result.bars_requested = max(1, int(result.bars_requested or requested_bars))
+            result.load_status = self._classify_status(
+                result.bars_loaded,
+                result.bars_requested,
+                options.partial_threshold,
+            )
+            if not options.allow_partial:
+                strict_threshold = max(0.90, float(options.partial_threshold))
+                completeness = float(result.bars_loaded) / max(1.0, float(result.bars_requested))
+                if completeness < strict_threshold:
+                    result.success = False
+                    result.error = (
+                        f"Partial data rejected: {result.bars_loaded}/{result.bars_requested} "
+                        f"({completeness:.0%})"
+                    )
+                    result.load_status = LoadStatus.INSUFFICIENT
+            
+            # Record API compliance telemetry
+            if _HAS_ENHANCED_RATE_LIMITING and source:
+                if result.success:
+                    _record_api_success(source, endpoint=f"history:{options.interval}")
+                else:
+                    _record_api_failure(source, status_code=self._parse_status_code(result.error or ""))
+            
+            # Persist successful data for future fallback/cache use
+            if result.success and result.data is not None and not result.data.empty:
+                self._set_cached_result(cache_key, result.data)
+                self._save_last_good(code, options.interval, result.data)
+                result.cache_hit = False
+            
+            # Fallback to last-known-good frame on transient failures
+            if (not result.success) or result.data is None or result.data.empty:
+                fallback = self._get_last_good(code, options.interval)
+                if isinstance(fallback, pd.DataFrame) and not fallback.empty:
+                    fallback = ensure_shanghai_datetime(fallback)
+                    fb_status = self._classify_status(
+                        bars_loaded=len(fallback),
+                        bars_requested=requested_bars,
+                        partial_threshold=options.partial_threshold,
+                    )
+                    warnings.append("Using last-known-good snapshot after fetch failure")
+                    result = FetchResult(
+                        success=True,
+                        data=fallback,
+                        bars_loaded=len(fallback),
+                        bars_requested=requested_bars,
+                        quality_score=self._calculate_quality_score(fallback, options.interval),
+                        load_time_ms=0.0,
+                        source_used=source or "last_good",
+                        cache_hit=True,
+                        validation_result=validation_result,
+                        load_status=fb_status,
+                        error=None,
+                        warnings=warnings,
+                    )
             
             # Record source health
             if result.success and source:
                 record_source_success(source, result.load_time_ms / 1000)
-            elif not result.success and source:
+            elif (not result.success) and source:
                 record_source_failure(source, result.error or "fetch failed")
             
             # Update metrics
@@ -345,10 +632,12 @@ class UnifiedDataFetcher:
             
         except Exception as e:
             load_time_ms = (time.time() - start_time) * 1000
+            err_text = str(e)
             
-            # Record failure for all sources
             if source:
-                record_source_failure(source, str(e))
+                record_source_failure(source, err_text)
+            if _HAS_ENHANCED_RATE_LIMITING and source:
+                _record_api_failure(source, status_code=self._parse_status_code(err_text))
             
             with self._metrics_lock:
                 self._metrics["failed_requests"] += 1
@@ -356,18 +645,39 @@ class UnifiedDataFetcher:
             
             log.error("[UNIFIED] %s: Exception: %s", correlation_id, e)
             
+            fallback = self._get_last_good(code, options.interval)
+            if isinstance(fallback, pd.DataFrame) and not fallback.empty:
+                fallback = ensure_shanghai_datetime(fallback)
+                warnings.append("Exception path fallback to last-known-good snapshot")
+                return FetchResult(
+                    success=True,
+                    data=fallback,
+                    bars_loaded=len(fallback),
+                    bars_requested=requested_bars,
+                    quality_score=self._calculate_quality_score(fallback, options.interval),
+                    load_time_ms=load_time_ms,
+                    source_used=source or "last_good",
+                    cache_hit=True,
+                    validation_result=None,
+                    load_status=self._classify_status(
+                        len(fallback), requested_bars, options.partial_threshold
+                    ),
+                    error=None,
+                    warnings=warnings,
+                )
+            
             return FetchResult(
                 success=False,
                 data=None,
                 bars_loaded=0,
-                bars_requested=options.bars or 0,
+                bars_requested=requested_bars,
                 quality_score=0.0,
                 load_time_ms=load_time_ms,
                 source_used=source,
                 cache_hit=False,
                 validation_result=None,
                 load_status=LoadStatus.FAILED,
-                error=str(e),
+                error=err_text,
                 warnings=warnings,
             )
     
@@ -403,10 +713,22 @@ class UnifiedDataFetcher:
                 log.debug("Progressive fetch chunk failed: %s", e)
                 return None
         
-        load_result = self._progressive_loader.load(
+        loader = ProgressiveDataLoader(
+            min_bars_intraday=int(self._config.data_loading.min_bars_intraday),
+            min_bars_daily=int(self._config.data_loading.min_bars_daily),
+            min_bars_weekly=int(self._config.data_loading.min_bars_weekly),
+            min_bars_monthly=int(self._config.data_loading.min_bars_monthly),
+            chunk_size=int(self._config.data_loading.chunk_size),
+            max_bars_per_request=int(self._config.data_loading.max_bars_per_request),
+            allow_partial=bool(options.allow_partial),
+            partial_threshold=max(0.05, float(options.partial_threshold)),
+            max_memory_mb=float(options.max_memory_mb or self._config.memory.max_memory_mb),
+        )
+        
+        load_result = loader.load(
             fetch_fn,
             interval=options.interval,
-            requested_bars=options.bars,
+            requested_bars=self._resolve_requested_bars(options),
         )
         
         return FetchResult(
@@ -417,7 +739,7 @@ class UnifiedDataFetcher:
             quality_score=load_result.quality_score,
             load_time_ms=load_result.load_time_ms,
             source_used=source,
-            cache_hit=False,  # Progressive doesn't use cache
+            cache_hit=False,
             validation_result=None,
             load_status=load_result.status,
             error=load_result.error,
@@ -430,7 +752,7 @@ class UnifiedDataFetcher:
         source: str | None,
     ) -> FetchResult:
         """Fetch directly without progressive loading."""
-        bars = options.bars or options.days * 240  # Rough conversion
+        bars = self._resolve_requested_bars(options)
         
         try:
             df = self._inner_fetcher.get_history(
@@ -459,6 +781,11 @@ class UnifiedDataFetcher:
             
             # Calculate quality score
             quality = self._calculate_quality_score(df, options.interval)
+            status = self._classify_status(
+                bars_loaded=len(df),
+                bars_requested=bars,
+                partial_threshold=options.partial_threshold,
+            )
             
             return FetchResult(
                 success=True,
@@ -468,9 +795,9 @@ class UnifiedDataFetcher:
                 quality_score=quality,
                 load_time_ms=0,  # Will be set by caller
                 source_used=source,
-                cache_hit=options.use_cache,
+                cache_hit=False,
                 validation_result=None,
-                load_status=LoadStatus.COMPLETE if len(df) >= bars * 0.9 else LoadStatus.PARTIAL,
+                load_status=status,
             )
             
         except Exception as e:
@@ -508,6 +835,10 @@ class UnifiedDataFetcher:
         # Add component metrics
         metrics["health_monitor"] = self.get_health_summary()
         metrics["config"] = self._config.to_dict()
+        with self._result_cache_lock:
+            metrics["result_cache_entries"] = len(self._result_cache)
+        with self._last_good_lock:
+            metrics["last_good_entries"] = len(self._last_good)
         
         # Calculate averages
         if metrics["total_requests"] > 0:

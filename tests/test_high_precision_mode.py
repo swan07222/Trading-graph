@@ -116,3 +116,75 @@ def test_runtime_quality_gate_keeps_strong_aligned_signal() -> None:
     )
     p._apply_runtime_signal_quality_gate(pred)
     assert pred.signal == Signal.STRONG_BUY
+
+
+def test_runtime_quality_gate_tightens_when_calibration_is_weak() -> None:
+    p = _make_predictor({"enabled": 0.0})
+    p._runtime_calibration_profile = {
+        "enabled": True,
+        "weak_validation": True,
+        "reliability_score": 0.25,
+    }
+    pred = Prediction(
+        stock_code="600519",
+        signal=Signal.BUY,
+        signal_strength=0.80,
+        confidence=0.77,
+        prob_up=0.57,
+        prob_down=0.49,
+        model_agreement=0.78,
+        entropy=0.26,
+        trend="UPTREND",
+        atr_pct_value=0.018,
+    )
+
+    p._apply_runtime_signal_quality_gate(pred)
+
+    assert pred.signal == Signal.HOLD
+    assert any("calibration reliability low" in w for w in pred.warnings)
+
+
+def test_runtime_quality_gate_filters_neutral_dominant_directional_bias() -> None:
+    p = _make_predictor({"enabled": 0.0})
+    pred = Prediction(
+        stock_code="600519",
+        signal=Signal.BUY,
+        signal_strength=0.74,
+        confidence=0.79,
+        prob_up=0.23,
+        prob_neutral=0.63,
+        prob_down=0.14,
+        model_agreement=0.76,
+        entropy=0.44,
+        trend="SIDEWAYS",
+        atr_pct_value=0.022,
+    )
+
+    p._apply_runtime_signal_quality_gate(pred)
+
+    assert pred.signal == Signal.HOLD
+    assert any("directional probability" in w.lower() for w in pred.warnings)
+
+
+def test_calibrate_confidence_compresses_under_weak_profile() -> None:
+    p = Predictor.__new__(Predictor)
+    p._confidence_calibration_enabled = True
+    p._runtime_calibration_profile = {
+        "enabled": True,
+        "weak_validation": True,
+        "reliability_score": 0.20,
+        "x_points": [0.0, 1.0],
+        "y_points": [0.45, 0.95],
+    }
+    p._stock_accuracy_history = {}
+
+    out = p._calibrate_confidence(
+        confidence=0.92,
+        stock_code="600519",
+        entropy=0.18,
+        model_agreement=0.85,
+        data_quality=0.95,
+        market_regime="",
+    )
+
+    assert out <= 0.78
